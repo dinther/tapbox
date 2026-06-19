@@ -1,0 +1,21 @@
+# Flash — WT32-ETH01 has 4 MB
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Ethernet
+CONFIG_ETH_ENABLED=y
+CONFIG_ETH_USE_ESP32_EMAC=y
+CONFIG_ETH_PHY_LAN87XX=y
+
+# LwIP — needed for Link multicast
+CONFIG_LWIP_IGMP=y
+CONFIG_LWIP_SO_RCVBUF=y
+
+# C++ exceptions required by Ableton Link internals
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+CONFIG_COMPILER_CXX_RTTI=y
+
+# 1 kHz tick so pdMS_TO_TICKS(1) == 1 tick (accurate button polling)
+CONFIG_FREERTOS_HZ=1000
+
+# Main task stack — Link needs headroom
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
