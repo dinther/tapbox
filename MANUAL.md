@@ -28,7 +28,7 @@ Reading left to right:
 - **3** — which beat of the bar you are on right now (this advances with the music)
 - **2** — how many other Link peers are connected to the session
 
-If you have just powered on and haven't tapped yet, the display shows dashes. This is normal — tapbox is waiting for you to set the tempo.
+On startup, tapbox joins the Link session immediately at 120 BPM. You can tap a new tempo whenever you are ready, or simply start adjusting from 120 using the encoder knob.
 
 ### The Controls
 
@@ -198,9 +198,6 @@ Send your messages to the IP address shown on the display at boot.
 ---
 
 ## Troubleshooting
-
-**The display shows dashes when I power on.**
-This is normal. tapbox is running and connected to the Link session, but is waiting for you to tap a tempo. Tap the button four times to go live.
 
 **The IP address does not appear at boot.**
 tapbox could not connect to the network within 10 seconds. Check that the Ethernet cable is plugged in securely and that the other end is connected to a live switch or router.
