@@ -54,6 +54,11 @@ static constexpr uint8_t CH_S = 0x5B;
 static constexpr uint8_t CH_t = 0x0F;
 static constexpr uint8_t CH_u = 0x1C;
 
+// ── Firmware version ───────────────────────────────────────────────────────────
+#define FW_MAJOR 1
+#define FW_MINOR 0
+#define FW_PATCH 0
+
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
 static const int    kSigCount     = 6;
@@ -100,8 +105,8 @@ static uint32_t menuEnteredAt = 0;
 enum MenuIdx {
     MENU_SIG = 0, MENU_ACC, MENU_BRIT,
     MENU_NET, MENU_IP, MENU_SN, MENU_GT,
-    MENU_RESET,
-    MENU_COUNT  // 8
+    MENU_RESET, MENU_VER, MENU_DONE,
+    MENU_COUNT  // 10
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -234,6 +239,8 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
     { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
     { CH_r, CH_S, CH_e, CH_t                      },  // rSet
+    { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK },  // vEr  (CH_u renders as 'v')
+    { CH_d, CH_o, CH_n, CH_e                      },  // done
 };
 
 static void render_int3(uint8_t *segs, int val) {
@@ -274,6 +281,13 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             break;
         case MENU_RESET:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
+            break;
+        case MENU_VER:
+            segs[5] = MAX7219Display::digit(FW_MAJOR) | MAX7219Display::SEG_DP;
+            segs[6] = MAX7219Display::digit(FW_MINOR) | MAX7219Display::SEG_DP;
+            segs[7] = MAX7219Display::digit(FW_PATCH);
+            break;
+        case MENU_DONE:
             break;
     }
 }
@@ -502,7 +516,11 @@ static void handle_encoder() {
             appMode       = MODE_MENU_NAV;
             menuEnteredAt = now;
         } else if (appMode == MODE_MENU_NAV) {
-            if (menuItem == MENU_RESET) {
+            if (menuItem == MENU_DONE) {
+                exit_menu();
+            } else if (menuItem == MENU_VER) {
+                menuEnteredAt = now;  // read-only — reset timeout only
+            } else if (menuItem == MENU_RESET) {
                 appMode       = MODE_MENU_CONFIRM;
                 menuEnteredAt = now;
             } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
