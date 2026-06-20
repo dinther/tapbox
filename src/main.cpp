@@ -520,10 +520,11 @@ static void handle_encoder() {
                 menuEnteredAt = now;
             }
         } else if (appMode == MODE_MENU_EDIT) {
+            bool netChanged = (menuItem == MENU_NET && menuEditVal != g_net);
             menu_commit(menuItem, menuEditVal);
             apply_settings();
             nvs_save_settings();
-            if (menuItem == MENU_NET) {
+            if (netChanged) {
                 show_boot_reboot();  // does not return
             }
             appMode       = MODE_MENU_NAV;
