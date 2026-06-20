@@ -57,7 +57,7 @@ static constexpr uint8_t CH_u = 0x1C;
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 0
-#define FW_PATCH 0
+#define FW_PATCH 1
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
