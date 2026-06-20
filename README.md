@@ -85,6 +85,16 @@ Send UDP packets to the device on **port 8000**.
 | `/nudge_down` | — | Retard phase by nudge amount |
 | `/downbeat` | — | Reset downbeat to now |
 
+## Installing
+
+Flash tapbox to your WT32-ETH01 directly from your browser — no software installation required:
+
+**[Open Web Installer](https://dinther.github.io/tapbox/)**
+
+Requires Chrome or Edge. Windows users may need the [CH340 driver](https://www.wch-ic.com/downloads/CH341SER_EXE.html) if the board is not detected.
+
+Pre-built binaries are also available on the [Releases](https://github.com/dinther/tapbox/releases) page for manual flashing with esptool.
+
 ## Building
 
 Requires [PlatformIO](https://platformio.org/) and the [abl_link](https://github.com/Ableton/link) C library.

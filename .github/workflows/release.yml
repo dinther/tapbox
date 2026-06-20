@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware
+        run: python -m platformio run
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: tapbox ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            .pio/build/wt32-eth01/bootloader.bin
+            .pio/build/wt32-eth01/partitions.bin
+            .pio/build/wt32-eth01/firmware.bin
+
+      - name: Update web installer manifest
+        run: |
+          TAG=${{ github.ref_name }}
+          BASE="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+          cat > docs/manifest.json << EOF
+          {
+            "name": "tapbox",
+            "version": "${TAG#v}",
+            "new_install_prompt_erase": true,
+            "builds": [
+              {
+                "chipFamily": "ESP32",
+                "parts": [
+                  { "path": "${BASE}/bootloader.bin", "offset": 4096 },
+                  { "path": "${BASE}/partitions.bin", "offset": 32768 },
+                  { "path": "${BASE}/firmware.bin",   "offset": 65536 }
+                ]
+              }
+            ]
+          }
+          EOF
+
+      - name: Commit and push manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git fetch origin master
+          git checkout master
+          git add docs/manifest.json
+          git diff --cached --quiet || git commit -m "Update web installer for ${{ github.ref_name }}"
+          git push origin master

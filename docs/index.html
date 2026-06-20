@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tapbox — Web Installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 560px;
+      margin: 4rem auto;
+      padding: 0 1.5rem;
+      color: #222;
+      line-height: 1.6;
+    }
+    h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+    p  { margin: 0.75rem 0; }
+    esp-web-install-button { margin: 1.5rem 0; display: block; }
+    .note { font-size: 0.9rem; color: #555; }
+    a { color: #0969da; }
+  </style>
+</head>
+<body>
+  <h1>tapbox — Web Installer</h1>
+  <p>Flash tapbox firmware to your WT32-ETH01 directly from your browser. No software installation needed.</p>
+
+  <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+
+  <p class="note">
+    Requires <strong>Chrome</strong> or <strong>Edge</strong> (WebSerial support).<br>
+    Windows users may need the
+    <a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank">CH340 driver</a>
+    if the board is not detected.
+  </p>
+
+  <p class="note">
+    Prefer to flash manually? Download the binaries from
+    <a href="https://github.com/dinther/tapbox/releases">Releases</a> and run:<br>
+    <code>esptool.py --chip esp32 write_flash 0x1000 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin</code>
+  </p>
+</body>
+</html>
