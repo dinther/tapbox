@@ -9,10 +9,10 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 
 - **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
-- **Encoder** — fine-tune BPM up/down in configurable steps (0.1 / 0.2 / 0.5 / 1.0)
+- **Encoder** — fine-tune BPM up/down; step size set by Acc. preset (Lo / Std / Hi)
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
 - **Menu system** — on-device configuration with NVS persistence across power cycles
-- **Static or DHCP** — configure IP address, subnet, and gateway via menu
+- **Static or DHCP** — configure IP address, subnet, and gateway via menu sub-menus
 - **IP splash on boot** — displays assigned IP address across two screens at startup
 
 ## Hardware
@@ -58,18 +58,18 @@ The tap button exits the menu immediately (and also performs a tap).
 
 | Label | Setting | Values |
 |-------|---------|--------|
-| `beat` | Time signature | 2, 3, 4, 5, 6, 7 |
-| `StEP` | Encoder BPM step | 0.1, 0.2, 0.5, 1.0 |
-| `nudg` | OSC nudge amount | 5, 10, 20, 50, 100 ms |
-| `brit` | Display brightness | 1 – 15 |
-| `nEt` | Network mode | `dhcP` / `StAt` |
-| `IP 1`–`IP 4` | Static IP address octets | 0 – 255 |
-| `Sn 1`–`Sn 4` | Subnet mask octets | 0 – 255 |
-| `Gt 1`–`Gt 4` | Gateway octets | 0 – 255 |
+| `Beat` | Time signature | 2, 3, 4, 5, 6, 7 |
+| `Acc.` | Accuracy preset | `Lo` (1.0 BPM / 50 ms) · `Std` (0.5 BPM / 20 ms) · `Hi` (0.1 BPM / 5 ms) |
+| `Led ` | Display brightness | 1 – 15 (live preview) |
+| `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) |
+| `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
+| `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |
+| `Hub.` | Gateway | sub-menu: Oct1–Oct4, 0–255 each |
 | `rSEt` | Factory reset | confirm with second press |
 
-IP / subnet / gateway items are only shown when network mode is `StAt`. Changing the network mode reboots the device after a 2-second `bOOt` display.
-
+`Acc.` controls both the encoder BPM step and the OSC nudge amount together.  
+`IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
+Static IP defaults: `192.168.1.200` / `255.255.255.0` / `192.168.1.1`.  
 Menu times out after 6 seconds of inactivity without saving.
 
 ## OSC Interface

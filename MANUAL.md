@@ -66,7 +66,11 @@ By default tapbox uses DHCP, meaning your router assigns it an address automatic
 
 ## The Settings Menu
 
-Press the encoder knob to open the menu. Turn the knob to move between settings, then press again to edit the selected one. Turn to change the value, press to confirm. If you want to leave without saving, just press the tap button or wait six seconds — tapbox will return to normal mode on its own.
+Press the encoder knob to open the menu. Turn the knob to move between settings, then press again to edit the selected one. Turn to change the value, press to confirm. Press the encoder once more to return to the menu and continue navigating.
+
+Some settings (IP address, subnet, gateway) open a sub-menu with individual octets. Navigate and edit them the same way, then select **done** and press to return to the main menu.
+
+If you want to leave at any point without saving, just press the tap button or wait six seconds — tapbox will return to normal mode on its own.
 
 ---
 
@@ -139,7 +143,7 @@ These three settings only appear in the menu when network mode is set to **Stat*
 - **Sub.** — the subnet mask (e.g. 255 . 255 . 255 . 0)
 - **Hub.** — the gateway address, usually your router (e.g. 192 . 168 . 1 . 1)
 
-Press the encoder on any of these items to enter the sub-menu. Turn to move between Oct1–Oct4, press to edit the selected octet, turn to change the value (0–255), then press again to confirm. Press the tap button at any time to exit back to normal mode.
+Press the encoder on any of these items to enter the sub-menu. Turn to move between Oct1–Oct4, press to edit the selected octet, turn to change the value (0–255), then press again to confirm. Navigate to **done** and press to return to the main menu, or press the tap button at any time to exit straight to normal mode.
 
 The factory defaults are **192.168.1.200** for the IP, **255.255.255.0** for the subnet, and **192.168.1.1** for the gateway — a sensible starting point for most home and studio networks. Adjust as needed for your setup.
 
@@ -149,7 +153,7 @@ The factory defaults are **192.168.1.200** for the IP, **255.255.255.0** for the
 
 **What it does:** returns all settings to their original defaults and clears any network configuration.
 
-When you select rSEt and press the encoder, the display asks `rSEt SurE` to make sure you did not land here by accident. Press the encoder once more to confirm, and tapbox resets everything: accuracy back to Std, brightness back to 7, network back to DHCP, all address fields cleared.
+When you select rSEt and press the encoder, the display asks `rSEt SurE` to make sure you did not land here by accident. Press the encoder once more to confirm, and tapbox resets everything: accuracy back to Std, brightness back to 7, network back to Auto, static address restored to 192.168.1.200 / 255.255.255.0 / 192.168.1.1.
 
 **When to use it:** if you have been experimenting with static IP settings and gotten yourself into a state where the device will not connect, a factory reset is the quickest way back to a working configuration.
 
