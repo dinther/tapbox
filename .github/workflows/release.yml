@@ -41,10 +41,12 @@ jobs:
             .pio/build/wt32-eth01/partitions.bin
             .pio/build/wt32-eth01/firmware.bin
 
-      - name: Update web installer manifest
+      - name: Update web installer
         run: |
           TAG=${{ github.ref_name }}
-          BASE="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+          cp .pio/build/wt32-eth01/bootloader.bin docs/
+          cp .pio/build/wt32-eth01/partitions.bin docs/
+          cp .pio/build/wt32-eth01/firmware.bin   docs/
           cat > docs/manifest.json << EOF
           {
             "name": "tapbox",
@@ -54,22 +56,22 @@ jobs:
               {
                 "chipFamily": "ESP32",
                 "parts": [
-                  { "path": "${BASE}/bootloader.bin", "offset": 4096 },
-                  { "path": "${BASE}/partitions.bin", "offset": 32768 },
-                  { "path": "${BASE}/firmware.bin",   "offset": 65536 }
+                  { "path": "bootloader.bin", "offset": 4096 },
+                  { "path": "partitions.bin", "offset": 32768 },
+                  { "path": "firmware.bin",   "offset": 65536 }
                 ]
               }
             ]
           }
           EOF
 
-      - name: Commit and push manifest
+      - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git fetch origin master
           git checkout master
-          git add docs/manifest.json
+          git add docs/manifest.json docs/bootloader.bin docs/partitions.bin docs/firmware.bin
           git diff --cached --quiet || git commit -m "Update web installer for ${{ github.ref_name }}"
           git push origin master

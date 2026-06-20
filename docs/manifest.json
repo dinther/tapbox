@@ -6,9 +6,9 @@
     {
       "chipFamily": "ESP32",
       "parts": [
-        { "path": "https://github.com/dinther/tapbox/releases/download/v1.0.0/bootloader.bin", "offset": 4096 },
-        { "path": "https://github.com/dinther/tapbox/releases/download/v1.0.0/partitions.bin", "offset": 32768 },
-        { "path": "https://github.com/dinther/tapbox/releases/download/v1.0.0/firmware.bin",   "offset": 65536 }
+        { "path": "bootloader.bin", "offset": 4096 },
+        { "path": "partitions.bin", "offset": 32768 },
+        { "path": "firmware.bin",   "offset": 65536 }
       ]
     }
   ]
