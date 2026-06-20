@@ -1,3 +1,4 @@
 .pio/
 .claude/
+managed_components/
 sdkconfig.wt32-eth01
