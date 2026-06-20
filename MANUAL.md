@@ -50,7 +50,7 @@ After you are locked in, any further taps continue to refine the tempo. If you s
 
 Once you are live, turning the encoder knob trims the tempo up or down in small steps. This is ideal for those moments when the energy of the room calls for pushing the track just a touch faster, or pulling it back slightly to let a breakdown breathe. The change is immediate and smooth, and every connected device follows along.
 
-The size of each step is configurable in the menu — see **BPM Step** below.
+The size of each step depends on the **Acc.** setting in the menu.
 
 ---
 
@@ -84,33 +84,27 @@ The beat counter on the display counts from 1 up to this number, then loops back
 
 ---
 
-### StEP — BPM Encoder Step
+### Acc. — Accuracy
 
-**What it does:** controls how much the tempo changes with each click of the encoder knob.
+**What it does:** sets the control sensitivity for both the encoder knob and OSC nudge commands in a single step.
 
-**Available values:** 0.1, 0.2, 0.5, 1.0 BPM per click
+| Setting | Encoder step | OSC nudge |
+|---------|-------------|-----------|
+| **Lo** | 1.0 BPM per click | 50 ms |
+| **Std** | 0.5 BPM per click | 20 ms |
+| **Hi** | 0.1 BPM per click | 5 ms |
 
-**When to use it:** in a studio session where you are hunting for exactly the right feel, 0.1 BPM steps let you dial in tempo with fine precision. In a live performance where you need to shift tempo quickly and decisively between sections, switching to 1.0 BPM steps means fewer turns of the knob to get where you are going. Choose the value that matches how you work.
+**Lo** is best for live performance where you need to shift tempo decisively between sections — fewer turns of the knob to get where you are going, and a nudge big enough to feel when re-aligning two sources by ear.
 
-*Default: 0.1*
+**Std** is the everyday setting. Half a BPM per click gives you enough resolution to dial in a feel without overshooting, and a 20 ms nudge handles most phase drift situations cleanly.
 
----
+**Hi** is for studio work where you are hunting for an exact tempo or need surgical phase correction — 0.1 BPM steps and 5 ms nudges let you inch toward the target without jumping past it.
 
-### nudg — Nudge Amount
-
-**What it does:** sets how far tapbox shifts the phase of the beat when you send a nudge command over OSC.
-
-Nudging does not change the tempo — it shifts the timing of the beat forward or backward by a small amount. This is useful when two Link sessions have drifted slightly out of phase alignment and you want to snap them back together without changing the BPM.
-
-**Available values:** 5, 10, 20, 50, 100 ms
-
-**When to use it:** if you are running a DJ set and you notice the downbeat of your tapbox session is landing just slightly ahead of the kick drum in Ableton, a quick nudge back by 10 or 20 ms can re-align them without anyone on the dance floor noticing. Use a smaller value for fine touch-ups and a larger value when you need a more noticeable correction.
-
-*Default: 20 ms*
+*Default: Std*
 
 ---
 
-### brit — Display Brightness
+### Led — Display Brightness
 
 **What it does:** adjusts how bright the display glows, from a dim 1 up to a full-intensity 15.
 
@@ -122,32 +116,32 @@ The display gives you a live preview as you turn the knob, so you can judge the 
 
 ---
 
-### nEt — Network Mode
+### Lan. — Network Mode
 
 **What it does:** switches between automatic (DHCP) and manual (static) IP addressing.
 
-- **dhcP** — your router assigns tapbox an IP address automatically every time it boots. This is the easiest option and works in most setups.
-- **StAt** — tapbox uses a fixed IP address that you configure yourself. The address never changes between reboots.
+- **Auto** — your router assigns tapbox an IP address automatically every time it boots. This is the easiest option and works in most setups.
+- **Stat** — tapbox uses a fixed IP address that you configure yourself. The address never changes between reboots.
 
 **When to use static:** if you send OSC commands to tapbox from a DAW or control surface, you may have the destination address hard-coded in your template. DHCP can occasionally assign a different address after a power cycle, which would break those connections. Setting a static IP means your routing always works, no reconfiguration needed.
 
 When you confirm a change to this setting, tapbox displays `bOOt` and restarts automatically to apply the new network configuration. No further action is needed.
 
-*Default: dhcP*
+*Default: Auto*
 
 ---
 
-### IP 1–4, Sn 1–4, Gt 1–4 — Static Network Address
+### IP, Sub., Hub. — Static Network Address
 
-These three groups of settings only appear in the menu when network mode is set to **StAt**.
+These three settings only appear in the menu when network mode is set to **Stat**. Each one opens a sub-menu with four octets labelled **Oct1** through **Oct4**.
 
-- **IP 1–4** — the static IP address you want tapbox to use (e.g. 192 . 168 . 1 . 50)
-- **Sn 1–4** — the subnet mask (e.g. 255 . 255 . 255 . 0)
-- **Gt 1–4** — the gateway address, usually your router (e.g. 192 . 168 . 1 . 1)
+- **IP** — the static IP address you want tapbox to use (e.g. 192 . 168 . 1 . 50)
+- **Sub.** — the subnet mask (e.g. 255 . 255 . 255 . 0)
+- **Hub.** — the gateway address, usually your router (e.g. 192 . 168 . 1 . 1)
 
-Each group has four items, one for each part of the address. Turn the encoder to set each octet between 0 and 255, then press to confirm before moving to the next.
+Press the encoder on any of these items to enter the sub-menu. Turn to move between Oct1–Oct4, press to edit the selected octet, turn to change the value (0–255), then press again to confirm. Press the tap button at any time to exit back to normal mode.
 
-**Tip:** if you are unsure what values to use, check the address currently assigned via DHCP (shown on the display at boot), and use that as a starting point — just make sure the last number is not one your router might assign to another device.
+The factory defaults are **192.168.1.200** for the IP, **255.255.255.0** for the subnet, and **192.168.1.1** for the gateway — a sensible starting point for most home and studio networks. Adjust as needed for your setup.
 
 ---
 
@@ -155,7 +149,7 @@ Each group has four items, one for each part of the address. Turn the encoder to
 
 **What it does:** returns all settings to their original defaults and clears any network configuration.
 
-When you select rSEt and press the encoder, the display asks `rSEt SurE` to make sure you did not land here by accident. Press the encoder once more to confirm, and tapbox resets everything: tempo step back to 0.1, brightness back to 7, network back to DHCP, all address fields cleared.
+When you select rSEt and press the encoder, the display asks `rSEt SurE` to make sure you did not land here by accident. Press the encoder once more to confirm, and tapbox resets everything: accuracy back to Std, brightness back to 7, network back to DHCP, all address fields cleared.
 
 **When to use it:** if you have been experimenting with static IP settings and gotten yourself into a state where the device will not connect, a factory reset is the quickest way back to a working configuration.
 
@@ -206,7 +200,7 @@ tapbox could not connect to the network within 10 seconds. Check that the Ethern
 Confirm the IP address on the display at next boot and update your OSC destination. If you are using a static IP, verify that the address, subnet, and gateway are all correct and that the address is not in use by another device.
 
 **I set a static IP and now tapbox is unreachable.**
-Use the factory reset (rSEt in the menu) to return to DHCP. The display will show the new DHCP address at the next boot.
+Use the factory reset (rSEt in the menu) to return to Auto. The display will show the assigned address at the next boot.
 
 **The tempo drifts slightly after many taps.**
 tapbox calculates BPM as an average across all taps in the session. Small variations in tap timing do shift the average, though the effect becomes smaller with each additional tap. For a locked-in tempo, tap steadily for 8 or more beats, then stop tapping and let the encoder handle any fine adjustments.

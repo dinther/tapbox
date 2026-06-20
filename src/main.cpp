@@ -36,13 +36,17 @@
 static constexpr uint8_t CH_a = 0x7D;
 static constexpr uint8_t CH_A = 0x77;
 static constexpr uint8_t CH_b = 0x1F;
+static constexpr uint8_t CH_B = 0x7F;
 static constexpr uint8_t CH_c = 0x0D;
 static constexpr uint8_t CH_d = 0x3D;
 static constexpr uint8_t CH_e = 0x6F;
 static constexpr uint8_t CH_g = 0x7B;
 static constexpr uint8_t CH_h = 0x17;
+static constexpr uint8_t CH_H = 0x37;
 static constexpr uint8_t CH_i = 0x10;
 static constexpr uint8_t CH_I = 0x30;
+static constexpr uint8_t CH_L = 0x0E;
+static constexpr uint8_t CH_o = 0x1D;
 static constexpr uint8_t CH_n = 0x15;
 static constexpr uint8_t CH_P = 0x67;
 static constexpr uint8_t CH_r = 0x05;
@@ -54,21 +58,18 @@ static constexpr uint8_t CH_u = 0x1C;
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
 static const int    kSigCount     = 6;
 
-static const double kBpmSteps[]   = { 0.1, 0.2, 0.5, 1.0 };
-static const int    kStepCount    = 4;
-
-static const int    kNudgeMs[]    = { 5, 10, 20, 50, 100 };
-static const int    kNudgeCount   = 5;
+static const double kAccStep[]    = { 1.0, 0.5, 0.1 };   // Lo, Std, Hi
+static const int    kAccNudgeMs[] = { 50,  20,  5   };   // Lo, Std, Hi
+static const int    kAccCount     = 3;
 
 // ── Persistent settings ────────────────────────────────────────────────────────
 static int g_sigIdx  = 2;              // kSignatures[2] = 4/4
-static int g_stepIdx = 0;              // kBpmSteps[0]   = 0.1 BPM
-static int g_nudgIdx = 2;              // kNudgeMs[2]    = 20 ms
+static int g_accIdx  = 1;              // kAccStep[1]    = Std
 static int g_brit    = 7;              // brightness 1–15
 static int g_net     = 0;              // 0=DHCP, 1=static
-static int g_ip[4]   = {0, 0, 0, 0};
-static int g_sn[4]   = {0, 0, 0, 0};
-static int g_gt[4]   = {0, 0, 0, 0};
+static int g_ip[4]   = {192, 168,   1, 200};
+static int g_sn[4]   = {255, 255, 255,   0};
+static int g_gt[4]   = {192, 168,   1,   1};
 
 // ── Runtime values derived from settings ──────────────────────────────────────
 static double g_bpmStep = 0.1;
@@ -91,21 +92,20 @@ static uint32_t lastEncSwDb  = 0;
 static uint32_t lastEncTurn  = 0;
 
 // ── Menu state ─────────────────────────────────────────────────────────────────
-enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM };
+enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
+               MODE_SUBMENU_NAV, MODE_SUBMENU_EDIT };
 static AppMode  appMode       = MODE_NORMAL;
 static uint32_t menuEnteredAt = 0;
 
 enum MenuIdx {
-    MENU_SIG = 0, MENU_STEP, MENU_NUDG, MENU_BRIT,
-    MENU_NET,
-    MENU_IP1, MENU_IP2, MENU_IP3, MENU_IP4,
-    MENU_SN1, MENU_SN2, MENU_SN3, MENU_SN4,
-    MENU_GT1, MENU_GT2, MENU_GT3, MENU_GT4,
+    MENU_SIG = 0, MENU_ACC, MENU_BRIT,
+    MENU_NET, MENU_IP, MENU_SN, MENU_GT,
     MENU_RESET,
-    MENU_COUNT  // 18
+    MENU_COUNT  // 8
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
+static int menuSubItem = 0;  // active octet (0–3) when in sub-menu
 
 // ── Time helpers ───────────────────────────────────────────────────────────────
 static inline uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
@@ -115,8 +115,8 @@ static inline uint64_t now_us() { return (uint64_t)esp_timer_get_time(); }
 
 static void apply_settings() {
     linkQuantum = kSignatures[g_sigIdx];
-    g_bpmStep   = kBpmSteps[g_stepIdx];
-    g_nudgeUs   = kNudgeMs[g_nudgIdx] * 1000;
+    g_bpmStep   = kAccStep[g_accIdx];
+    g_nudgeUs   = kAccNudgeMs[g_accIdx] * 1000;
     display.setIntensity(g_brit);
 }
 
@@ -127,10 +127,9 @@ static void nvs_load_settings() {
         return;
     }
     int32_t v;
-    if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx  = (int)v;
-    if (nvs_get_i32(h, "step", &v) == ESP_OK && v >= 0 && v < kStepCount)  g_stepIdx = (int)v;
-    if (nvs_get_i32(h, "nudg", &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgIdx = (int)v;
-    if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 1 && v <= 15)         g_brit    = (int)v;
+    if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)  g_sigIdx = (int)v;
+    if (nvs_get_i32(h, "acc",  &v) == ESP_OK && v >= 0 && v < kAccCount)  g_accIdx = (int)v;
+    if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 1 && v <= 15)        g_brit   = (int)v;
     if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net     = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]   = (int)v;
     if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]   = (int)v;
@@ -152,8 +151,7 @@ static void nvs_save_settings() {
     nvs_handle_t h;
     if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_i32(h, "sig",  (int32_t)g_sigIdx);
-    nvs_set_i32(h, "step", (int32_t)g_stepIdx);
-    nvs_set_i32(h, "nudg", (int32_t)g_nudgIdx);
+    nvs_set_i32(h, "acc",  (int32_t)g_accIdx);
     nvs_set_i32(h, "brit", (int32_t)g_brit);
     nvs_set_i32(h, "net",  (int32_t)g_net);
     nvs_set_i32(h, "ip0",  (int32_t)g_ip[0]);
@@ -173,11 +171,11 @@ static void nvs_save_settings() {
 }
 
 static void factory_reset() {
-    g_sigIdx = 2; g_stepIdx = 0; g_nudgIdx = 2; g_brit = 7;
+    g_sigIdx = 2; g_accIdx = 1; g_brit = 7;
     g_net = 0;
-    g_ip[0] = g_ip[1] = g_ip[2] = g_ip[3] = 0;
-    g_sn[0] = g_sn[1] = g_sn[2] = g_sn[3] = 0;
-    g_gt[0] = g_gt[1] = g_gt[2] = g_gt[3] = 0;
+    g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
+    g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
+    g_gt[0] = 192; g_gt[1] = 168; g_gt[2] =   1; g_gt[3] =   1;
     nvs_save_settings();
     apply_settings();
 }
@@ -185,23 +183,16 @@ static void factory_reset() {
 // ── Menu value helpers ─────────────────────────────────────────────────────────
 
 static bool menu_item_visible(int item) {
-    if (item >= MENU_IP1 && item <= MENU_GT4) return g_net == 1;
+    if (item == MENU_IP || item == MENU_SN || item == MENU_GT) return g_net == 1;
     return true;
 }
 
 static int menu_get_val(int item) {
     switch (item) {
         case MENU_SIG:  return g_sigIdx;
-        case MENU_STEP: return g_stepIdx;
-        case MENU_NUDG: return g_nudgIdx;
+        case MENU_ACC:  return g_accIdx;
         case MENU_BRIT: return g_brit;
         case MENU_NET:  return g_net;
-        case MENU_IP1: case MENU_IP2: case MENU_IP3: case MENU_IP4:
-            return g_ip[item - MENU_IP1];
-        case MENU_SN1: case MENU_SN2: case MENU_SN3: case MENU_SN4:
-            return g_sn[item - MENU_SN1];
-        case MENU_GT1: case MENU_GT2: case MENU_GT3: case MENU_GT4:
-            return g_gt[item - MENU_GT1];
         default: return 0;
     }
 }
@@ -210,56 +201,38 @@ static int menu_val_min(int item) { return (item == MENU_BRIT) ? 1 : 0; }
 
 static int menu_val_max(int item) {
     switch (item) {
-        case MENU_SIG:  return kSigCount   - 1;
-        case MENU_STEP: return kStepCount  - 1;
-        case MENU_NUDG: return kNudgeCount - 1;
+        case MENU_SIG:  return kSigCount - 1;
+        case MENU_ACC:  return kAccCount - 1;
         case MENU_BRIT: return 15;
         case MENU_NET:  return 1;
-        case MENU_IP1: case MENU_IP2: case MENU_IP3: case MENU_IP4:
-        case MENU_SN1: case MENU_SN2: case MENU_SN3: case MENU_SN4:
-        case MENU_GT1: case MENU_GT2: case MENU_GT3: case MENU_GT4:
-            return 255;
         default: return 0;
     }
 }
 
 static void menu_commit(int item, int val) {
     switch (item) {
-        case MENU_SIG:  g_sigIdx  = val; break;
-        case MENU_STEP: g_stepIdx = val; break;
-        case MENU_NUDG: g_nudgIdx = val; break;
-        case MENU_BRIT: g_brit    = val; break;
-        case MENU_NET:  g_net     = val; break;
-        case MENU_IP1: case MENU_IP2: case MENU_IP3: case MENU_IP4:
-            g_ip[item - MENU_IP1] = val; break;
-        case MENU_SN1: case MENU_SN2: case MENU_SN3: case MENU_SN4:
-            g_sn[item - MENU_SN1] = val; break;
-        case MENU_GT1: case MENU_GT2: case MENU_GT3: case MENU_GT4:
-            g_gt[item - MENU_GT1] = val; break;
+        case MENU_SIG:  g_sigIdx = val; break;
+        case MENU_ACC:  g_accIdx = val; break;
+        case MENU_BRIT: g_brit   = val; break;
+        case MENU_NET:  g_net    = val; break;
     }
+}
+
+static int *submenu_array() {
+    return (menuItem == MENU_IP) ? g_ip : (menuItem == MENU_SN) ? g_sn : g_gt;
 }
 
 // ── Display ────────────────────────────────────────────────────────────────────
 
 // Digit segment bytes for use in static label arrays: 0=0x7E 1=0x30 2=0x6D 3=0x79 4=0x33
 static const uint8_t kMenuLabels[MENU_COUNT][4] = {
-    { CH_b, CH_e, CH_a, CH_t                      },  // beat
-    { CH_S, CH_t, CH_e, CH_P                      },  // StEP
-    { CH_n, CH_u, CH_d, CH_g                      },  // nudg
-    { CH_b, CH_r, CH_i, CH_t                      },  // brit
-    { CH_n, CH_e, CH_t, MAX7219Display::SEG_BLANK },  // net
-    { CH_I, CH_P, MAX7219Display::SEG_BLANK, 0x30 },  // IP 1
-    { CH_I, CH_P, MAX7219Display::SEG_BLANK, 0x6D },  // IP 2
-    { CH_I, CH_P, MAX7219Display::SEG_BLANK, 0x79 },  // IP 3
-    { CH_I, CH_P, MAX7219Display::SEG_BLANK, 0x33 },  // IP 4
-    { CH_S, CH_n, MAX7219Display::SEG_BLANK, 0x30 },  // Sn 1
-    { CH_S, CH_n, MAX7219Display::SEG_BLANK, 0x6D },  // Sn 2
-    { CH_S, CH_n, MAX7219Display::SEG_BLANK, 0x79 },  // Sn 3
-    { CH_S, CH_n, MAX7219Display::SEG_BLANK, 0x33 },  // Sn 4
-    { CH_g, CH_t, MAX7219Display::SEG_BLANK, 0x30 },  // Gt 1
-    { CH_g, CH_t, MAX7219Display::SEG_BLANK, 0x6D },  // Gt 2
-    { CH_g, CH_t, MAX7219Display::SEG_BLANK, 0x79 },  // Gt 3
-    { CH_g, CH_t, MAX7219Display::SEG_BLANK, 0x33 },  // Gt 4
+    { CH_B, CH_e, CH_a, CH_t                                       },  // Beat
+    { CH_A, CH_c, CH_c | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Acc.
+    { CH_L, CH_e, CH_d, MAX7219Display::SEG_BLANK                  },  // Led
+    { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
+    { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
+    { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
+    { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
     { CH_r, CH_S, CH_e, CH_t                      },  // rSet
 };
 
@@ -276,16 +249,14 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             segs[5] = segs[6] = MAX7219Display::SEG_BLANK;
             segs[7] = MAX7219Display::digit((int)kSignatures[val]);
             break;
-        case MENU_STEP: {
-            static const uint8_t hi[] = { 0, 0, 0, 1 };
-            static const uint8_t lo[] = { 1, 2, 5, 0 };
-            segs[5] = MAX7219Display::SEG_BLANK;
-            segs[6] = MAX7219Display::digit(hi[val]) | MAX7219Display::SEG_DP;
-            segs[7] = MAX7219Display::digit(lo[val]);
-            break;
-        }
-        case MENU_NUDG:
-            render_int3(segs, kNudgeMs[val]);
+        case MENU_ACC:
+            if (val == 1) {
+                segs[5] = CH_S; segs[6] = CH_t; segs[7] = CH_d;  // Std
+            } else {
+                segs[5] = MAX7219Display::SEG_BLANK;
+                segs[6] = (val == 0) ? CH_L : CH_h;
+                segs[7] = (val == 0) ? CH_o : CH_i;               // Lo / Hi
+            }
             break;
         case MENU_BRIT:
             render_int3(segs, val);
@@ -293,15 +264,13 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
         case MENU_NET:
             // 4-char value fills positions 4-7, overriding the blank separator
             if (val == 0) {
-                segs[4] = CH_d; segs[5] = CH_h; segs[6] = CH_c; segs[7] = CH_P;
+                segs[4] = CH_A; segs[5] = CH_u; segs[6] = CH_t; segs[7] = CH_o;
             } else {
-                segs[4] = CH_S; segs[5] = CH_t; segs[6] = CH_A; segs[7] = CH_t;
+                segs[4] = CH_S; segs[5] = CH_t; segs[6] = CH_a; segs[7] = CH_t;
             }
             break;
-        case MENU_IP1: case MENU_IP2: case MENU_IP3: case MENU_IP4:
-        case MENU_SN1: case MENU_SN2: case MENU_SN3: case MENU_SN4:
-        case MENU_GT1: case MENU_GT2: case MENU_GT3: case MENU_GT4:
-            render_int3(segs, val);
+        case MENU_IP: case MENU_SN: case MENU_GT:
+            segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
             break;
         case MENU_RESET:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
@@ -345,6 +314,22 @@ static void update_display() {
     if (appMode == MODE_MENU_CONFIRM) {
         segs[0] = CH_r; segs[1] = CH_S; segs[2] = CH_e; segs[3] = CH_t;
         segs[4] = CH_S; segs[5] = CH_u; segs[6] = CH_r; segs[7] = CH_e;
+        display.setSegments(segs);
+        return;
+    }
+
+    if (appMode == MODE_SUBMENU_NAV || appMode == MODE_SUBMENU_EDIT) {
+        if (menuSubItem == 4) {
+            segs[0] = CH_d; segs[1] = CH_o; segs[2] = CH_n; segs[3] = CH_e;
+        } else {
+            segs[0] = MAX7219Display::digit(0);  // O
+            segs[1] = CH_c;
+            segs[2] = CH_t;
+            segs[3] = MAX7219Display::digit(menuSubItem + 1);
+            int  val   = (appMode == MODE_SUBMENU_EDIT) ? menuEditVal : submenu_array()[menuSubItem];
+            bool blank = (appMode == MODE_SUBMENU_EDIT) && ((now_ms() / 250) & 1);
+            if (!blank) render_int3(segs, val);
+        }
         display.setSegments(segs);
         return;
     }
@@ -492,6 +477,12 @@ static void handle_encoder() {
                 menuEditVal = lo + ((menuEditVal - lo + dir + range) % range);
             }
             menuEnteredAt = now;
+        } else if (appMode == MODE_SUBMENU_NAV) {
+            menuSubItem   = (menuSubItem + 5 + dir) % 5;
+            menuEnteredAt = now;
+        } else if (appMode == MODE_SUBMENU_EDIT) {
+            menuEditVal   = (menuEditVal + dir + 256) % 256;
+            menuEnteredAt = now;
         } else if (appMode == MODE_NORMAL && linkEnabled) {
             abl_link_capture_app_session_state(s_link, s_session);
             double newBpm = abl_link_tempo(s_session) + dir * g_bpmStep;
@@ -514,6 +505,10 @@ static void handle_encoder() {
             if (menuItem == MENU_RESET) {
                 appMode       = MODE_MENU_CONFIRM;
                 menuEnteredAt = now;
+            } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
+                menuSubItem   = 0;
+                appMode       = MODE_SUBMENU_NAV;
+                menuEnteredAt = now;
             } else {
                 menuEditVal   = menu_get_val(menuItem);
                 appMode       = MODE_MENU_EDIT;
@@ -528,6 +523,20 @@ static void handle_encoder() {
                 show_boot_reboot();  // does not return
             }
             appMode       = MODE_MENU_NAV;
+            menuEnteredAt = now;
+        } else if (appMode == MODE_SUBMENU_NAV) {
+            if (menuSubItem == 4) {
+                appMode       = MODE_MENU_NAV;
+                menuEnteredAt = now;
+            } else {
+                menuEditVal   = submenu_array()[menuSubItem];
+                appMode       = MODE_SUBMENU_EDIT;
+                menuEnteredAt = now;
+            }
+        } else if (appMode == MODE_SUBMENU_EDIT) {
+            submenu_array()[menuSubItem] = menuEditVal;
+            nvs_save_settings();
+            appMode       = MODE_SUBMENU_NAV;
             menuEnteredAt = now;
         } else if (appMode == MODE_MENU_CONFIRM) {
             factory_reset();
@@ -579,10 +588,10 @@ static void osc_handle(const uint8_t *buf, int len) {
         printf("OSC bpm: %.1f\n", tapTempo.bpm());
     } else if (strcmp(addr, "/nudge_up") == 0) {
         nudge_phase(g_nudgeUs);
-        printf("OSC nudge +%dms\n", kNudgeMs[g_nudgIdx]);
+        printf("OSC nudge +%dms\n", kAccNudgeMs[g_accIdx]);
     } else if (strcmp(addr, "/nudge_down") == 0) {
         nudge_phase(-g_nudgeUs);
-        printf("OSC nudge -%dms\n", kNudgeMs[g_nudgIdx]);
+        printf("OSC nudge -%dms\n", kAccNudgeMs[g_accIdx]);
     } else if (strcmp(addr, "/downbeat") == 0) {
         reset_downbeat();
         printf("OSC downbeat reset\n");
