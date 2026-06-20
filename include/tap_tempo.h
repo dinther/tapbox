@@ -56,7 +56,7 @@ public:
 private:
     static constexpr uint32_t TIMEOUT_MS = 2000;
     static constexpr double   BPM_MIN    = 40.0;
-    static constexpr double   BPM_MAX    = 240.0;
+    static constexpr double   BPM_MAX    = 360.0;
 
     static double _clamp(double v, double lo, double hi) {
         return v < lo ? lo : (v > hi ? hi : v);

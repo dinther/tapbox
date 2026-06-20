@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <cmath>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
@@ -14,56 +16,201 @@
 #include "max7219.h"
 #include "lwip/sockets.h"
 
-// ── Pin assignments ───────────────────────────────────────────────────────────
-#define PIN_TAP_BUTTON  GPIO_NUM_35
+// ── Pin assignments ────────────────────────────────────────────────────────────
+#define PIN_TAP_BUTTON  GPIO_NUM_4
 #define PIN_ENC_A       GPIO_NUM_36
 #define PIN_ENC_B       GPIO_NUM_39
-#define PIN_ENC_SW      GPIO_NUM_4
+#define PIN_ENC_SW      GPIO_NUM_35
 #define PIN_DISP_CLK    GPIO_NUM_14
 #define PIN_DISP_DIN    GPIO_NUM_2
 #define PIN_DISP_LOAD   GPIO_NUM_15
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────────
 #define DEBOUNCE_MS     5
-#define ENC_BPM_STEP    0.1
 #define DISPLAY_MS      50
-#define MENU_TIMEOUT_MS 3000
-#define NUDGE_US        20000
+#define MENU_TIMEOUT_MS 6000
 #define OSC_PORT        8000
 
-// ── Time signatures available in the menu ────────────────────────────────────
-static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
-static const int    kSigCount     = sizeof(kSignatures) / sizeof(kSignatures[0]);
+// ── 7-segment characters (D6=A … D0=G) ────────────────────────────────────────
+static constexpr uint8_t CH_a = 0x7D;
+static constexpr uint8_t CH_b = 0x1F;
+static constexpr uint8_t CH_d = 0x3D;
+static constexpr uint8_t CH_e = 0x6F;
+static constexpr uint8_t CH_g = 0x7B;
+static constexpr uint8_t CH_i = 0x10;
+static constexpr uint8_t CH_n = 0x15;
+static constexpr uint8_t CH_P = 0x67;
+static constexpr uint8_t CH_r = 0x05;
+static constexpr uint8_t CH_S = 0x5B;
+static constexpr uint8_t CH_t = 0x0F;
+static constexpr uint8_t CH_u = 0x1C;
 
-// ── Globals ───────────────────────────────────────────────────────────────────
-static TapTempo      tapTempo;
+// ── Menu option tables ─────────────────────────────────────────────────────────
+static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
+static const int    kSigCount     = 6;
+
+static const double kBpmSteps[]   = { 0.1, 0.2, 0.5, 1.0 };
+static const int    kStepCount    = 4;
+
+static const int    kNudgeMs[]    = { 5, 10, 20, 50, 100 };
+static const int    kNudgeCount   = 5;
+
+// ── Persistent settings (indices into tables, or direct values) ────────────────
+static int g_sigIdx  = 2;  // kSignatures[2] = 4/4
+static int g_stepIdx = 0;  // kBpmSteps[0]   = 0.1 BPM
+static int g_nudgIdx = 2;  // kNudgeMs[2]    = 20 ms
+static int g_brit    = 7;  // brightness 1–15
+
+// ── Runtime values derived from settings ──────────────────────────────────────
+static double g_bpmStep = 0.1;
+static int    g_nudgeUs = 20000;
+
+// ── Core globals ───────────────────────────────────────────────────────────────
+static TapTempo       tapTempo;
 static MAX7219Display display(PIN_DISP_CLK, PIN_DISP_DIN, PIN_DISP_LOAD);
 
 static abl_link               s_link;
 static abl_link_session_state s_session;
 static bool   linkEnabled = false;
-static double linkQuantum = 4.0;  // active time signature (beats per bar)
+static double linkQuantum = 4.0;
 
-static int      lastButton = 1;
-static int      lastEncSw  = 1;
-static int      lastEncA   = 1;
+static int      lastButton   = 1;
+static int      lastEncSw    = 1;
+static int      lastEncA     = 1;
 static uint32_t lastDebounce = 0;
 static uint32_t lastEncSwDb  = 0;
 static uint32_t lastEncTurn  = 0;
 
-enum AppMode { MODE_NORMAL, MODE_MENU };
+// ── Menu state ─────────────────────────────────────────────────────────────────
+enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM };
 static AppMode  appMode       = MODE_NORMAL;
 static uint32_t menuEnteredAt = 0;
-static int      menuSelIdx    = 2;  // index into kSignatures; 2 = 4/4 default
 
-// ── Time helpers ──────────────────────────────────────────────────────────────
+enum MenuIdx { MENU_SIG = 0, MENU_STEP, MENU_NUDG, MENU_BRIT, MENU_RESET, MENU_COUNT };
+static int menuItem    = 0;
+static int menuEditVal = 0;
 
+// ── Time helpers ───────────────────────────────────────────────────────────────
 static inline uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
 static inline uint64_t now_us() { return (uint64_t)esp_timer_get_time(); }
 
-// ── Display ───────────────────────────────────────────────────────────────────
+// ── Settings ───────────────────────────────────────────────────────────────────
 
-// Layout: [BPM hundreds][BPM tens][BPM units.][BPM tenths] [blank] [beat] [blank] [peers]
+static void apply_settings() {
+    linkQuantum = kSignatures[g_sigIdx];
+    g_bpmStep   = kBpmSteps[g_stepIdx];
+    g_nudgeUs   = kNudgeMs[g_nudgIdx] * 1000;
+    display.setIntensity(g_brit);
+}
+
+static void nvs_load_settings() {
+    nvs_handle_t h;
+    if (nvs_open("settings", NVS_READONLY, &h) != ESP_OK) {
+        apply_settings();
+        return;
+    }
+    int32_t v;
+    if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx  = (int)v;
+    if (nvs_get_i32(h, "step", &v) == ESP_OK && v >= 0 && v < kStepCount)  g_stepIdx = (int)v;
+    if (nvs_get_i32(h, "nudg", &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgIdx = (int)v;
+    if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 1 && v <= 15)         g_brit    = (int)v;
+    nvs_close(h);
+    apply_settings();
+}
+
+static void nvs_save_settings() {
+    nvs_handle_t h;
+    if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_i32(h, "sig",  (int32_t)g_sigIdx);
+    nvs_set_i32(h, "step", (int32_t)g_stepIdx);
+    nvs_set_i32(h, "nudg", (int32_t)g_nudgIdx);
+    nvs_set_i32(h, "brit", (int32_t)g_brit);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void factory_reset() {
+    g_sigIdx = 2; g_stepIdx = 0; g_nudgIdx = 2; g_brit = 7;
+    nvs_save_settings();
+    apply_settings();
+}
+
+// ── Menu value helpers ─────────────────────────────────────────────────────────
+
+static int menu_get_val(int item) {
+    switch (item) {
+        case MENU_SIG:  return g_sigIdx;
+        case MENU_STEP: return g_stepIdx;
+        case MENU_NUDG: return g_nudgIdx;
+        case MENU_BRIT: return g_brit;
+        default:        return 0;
+    }
+}
+
+static int menu_val_min(int item) { return (item == MENU_BRIT) ? 1 : 0; }
+
+static int menu_val_max(int item) {
+    switch (item) {
+        case MENU_SIG:  return kSigCount   - 1;
+        case MENU_STEP: return kStepCount  - 1;
+        case MENU_NUDG: return kNudgeCount - 1;
+        case MENU_BRIT: return 15;
+        default:        return 0;
+    }
+}
+
+static void menu_commit(int item, int val) {
+    switch (item) {
+        case MENU_SIG:  g_sigIdx  = val; break;
+        case MENU_STEP: g_stepIdx = val; break;
+        case MENU_NUDG: g_nudgIdx = val; break;
+        case MENU_BRIT: g_brit    = val; break;
+    }
+}
+
+// ── Display ────────────────────────────────────────────────────────────────────
+
+static const uint8_t kMenuLabels[MENU_COUNT][4] = {
+    { CH_b, CH_e, CH_a, CH_t },  // beat (time signature)
+    { CH_S, CH_t, CH_e, CH_P },  // StEP
+    { CH_n, CH_u, CH_d, CH_g },  // nudg
+    { CH_b, CH_r, CH_i, CH_t },  // brit
+    { CH_r, CH_S, CH_e, CH_t },  // rSet
+};
+
+static void render_int3(uint8_t *segs, int val) {
+    int h = val / 100, t = (val / 10) % 10, u = val % 10;
+    segs[5] = h       ? MAX7219Display::digit(h) : MAX7219Display::SEG_BLANK;
+    segs[6] = (h||t)  ? MAX7219Display::digit(t) : MAX7219Display::SEG_BLANK;
+    segs[7] = MAX7219Display::digit(u);
+}
+
+static void render_menu_value(uint8_t *segs, int item, int val) {
+    switch (item) {
+        case MENU_SIG:
+            segs[5] = segs[6] = MAX7219Display::SEG_BLANK;
+            segs[7] = MAX7219Display::digit((int)kSignatures[val]);
+            break;
+        case MENU_STEP: {
+            static const uint8_t hi[] = { 0, 0, 0, 1 };
+            static const uint8_t lo[] = { 1, 2, 5, 0 };
+            segs[5] = MAX7219Display::SEG_BLANK;
+            segs[6] = MAX7219Display::digit(hi[val]) | MAX7219Display::SEG_DP;
+            segs[7] = MAX7219Display::digit(lo[val]);
+            break;
+        }
+        case MENU_NUDG:
+            render_int3(segs, kNudgeMs[val]);
+            break;
+        case MENU_BRIT:
+            render_int3(segs, val);
+            break;
+        case MENU_RESET:
+            segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
+            break;
+    }
+}
+
 static void update_display() {
     static uint32_t lastUpdate = 0;
     if (now_ms() - lastUpdate < DISPLAY_MS) return;
@@ -71,44 +218,54 @@ static void update_display() {
 
     uint8_t segs[8] = {};
 
-    if (appMode == MODE_MENU) {
-        segs[0] = segs[1] = segs[2] = segs[3] = MAX7219Display::SEG_DASH;
-        segs[7] = MAX7219Display::digit((int)kSignatures[menuSelIdx]);
+    if (appMode == MODE_NORMAL) {
+        if (!linkEnabled) {
+            for (int i = 0; i < 8; i++) segs[i] = MAX7219Display::SEG_DASH;
+        } else {
+            abl_link_capture_app_session_state(s_link, s_session);
+            double bpm   = abl_link_tempo(s_session);
+            double phase = abl_link_phase_at_time(s_session, now_us(), linkQuantum);
+            int    peers = (int)abl_link_num_peers(s_link);
+
+            int bpmX10   = (int)round(bpm * 10.0);
+            int hundreds = bpmX10 / 1000;
+            int tens     = (bpmX10 / 100) % 10;
+            int units    = (bpmX10 / 10)  % 10;
+            int tenths   = bpmX10 % 10;
+
+            segs[0] = hundreds          ? MAX7219Display::digit(hundreds) : MAX7219Display::SEG_BLANK;
+            segs[1] = (hundreds || tens) ? MAX7219Display::digit(tens)    : MAX7219Display::SEG_BLANK;
+            segs[2] = MAX7219Display::digit(units) | MAX7219Display::SEG_DP;
+            segs[3] = MAX7219Display::digit(tenths);
+            // segs[4] blank
+            segs[5] = MAX7219Display::digit((int)floor(phase) + 1);
+            // segs[6] blank
+            segs[7] = MAX7219Display::digit(peers > 9 ? 9 : peers);
+        }
         display.setSegments(segs);
         return;
     }
 
-    if (!linkEnabled) {
-        for (int i = 0; i < 8; i++) segs[i] = MAX7219Display::SEG_DASH;
+    if (appMode == MODE_MENU_CONFIRM) {
+        // "rSEt SurE" across all 8 digits
+        segs[0] = CH_r; segs[1] = CH_S; segs[2] = CH_e; segs[3] = CH_t;
+        segs[4] = CH_S; segs[5] = CH_u; segs[6] = CH_r; segs[7] = CH_e;
         display.setSegments(segs);
         return;
     }
 
-    abl_link_capture_app_session_state(s_link, s_session);
-    double bpm   = abl_link_tempo(s_session);
-    double phase = abl_link_phase_at_time(s_session, now_us(), linkQuantum);
-    int    peers = (int)abl_link_num_peers(s_link);
+    // MODE_MENU_NAV or MODE_MENU_EDIT
+    memcpy(segs, kMenuLabels[menuItem], 4);
+    // segs[4] stays blank
 
-    int bpmX10   = (int)round(bpm * 10.0);
-    int hundreds = bpmX10 / 1000;
-    int tens     = (bpmX10 / 100) % 10;
-    int units    = (bpmX10 / 10) % 10;
-    int tenths   = bpmX10 % 10;
-    int beatInBar = (int)floor(phase) + 1;  // 1-based, 1 to linkQuantum
-
-    segs[0] = hundreds ? MAX7219Display::digit(hundreds) : MAX7219Display::SEG_BLANK;
-    segs[1] = (hundreds || tens) ? MAX7219Display::digit(tens) : MAX7219Display::SEG_BLANK;
-    segs[2] = MAX7219Display::digit(units) | MAX7219Display::SEG_DP;
-    segs[3] = MAX7219Display::digit(tenths);
-    // segs[4] blank
-    segs[5] = MAX7219Display::digit(beatInBar);
-    // segs[6] blank
-    segs[7] = MAX7219Display::digit(peers > 9 ? 9 : peers);
+    int  val   = (appMode == MODE_MENU_EDIT) ? menuEditVal : menu_get_val(menuItem);
+    bool blank = (appMode == MODE_MENU_EDIT) && ((now_ms() / 250) & 1);
+    if (!blank) render_menu_value(segs, menuItem, val);
 
     display.setSegments(segs);
 }
 
-// ── IP splash ────────────────────────────────────────────────────────────────
+// ── IP splash ──────────────────────────────────────────────────────────────────
 
 static void fill_octet(uint8_t *slots, int val) {
     slots[2] = MAX7219Display::digit(val % 10); val /= 10;
@@ -119,17 +276,16 @@ static void fill_octet(uint8_t *slots, int val) {
 static void show_ip_splash() {
     int o[4];
     if (sscanf(ethIPStr, "%d.%d.%d.%d", &o[0], &o[1], &o[2], &o[3]) != 4) return;
-
     for (int pair = 0; pair < 2; pair++) {
         uint8_t segs[8] = {};
-        fill_octet(segs + 1, o[pair * 2]);      // octets 0,2 in slots 1-3
-        fill_octet(segs + 5, o[pair * 2 + 1]);  // octets 1,3 in slots 5-7
+        fill_octet(segs + 1, o[pair * 2]);
+        fill_octet(segs + 5, o[pair * 2 + 1]);
         display.setSegments(segs);
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 
-// ── Link helpers ──────────────────────────────────────────────────────────────
+// ── Link helpers ───────────────────────────────────────────────────────────────
 
 static void set_link_tempo(double bpm) {
     abl_link_capture_app_session_state(s_link, s_session);
@@ -157,39 +313,44 @@ static void reset_downbeat() {
 static void go_live(double bpm, uint32_t sessionStartMs) {
     abl_link_enable(s_link, true);
     linkEnabled = true;
-
     uint64_t linkNow    = now_us();
     uint64_t tap1LinkUs = linkNow - ((uint64_t)(now_ms() - sessionStartMs) * 1000ULL);
-
     abl_link_capture_app_session_state(s_link, s_session);
     abl_link_set_tempo(s_session, bpm, linkNow);
     abl_link_force_beat_at_time(s_session, 0.0, tap1LinkUs, linkQuantum);
     abl_link_commit_app_session_state(s_link, s_session);
 }
 
-// ── Input handlers ────────────────────────────────────────────────────────────
+// ── Input ──────────────────────────────────────────────────────────────────────
+
+static void exit_menu() {
+    if (appMode == MODE_MENU_EDIT && menuItem == MENU_BRIT)
+        display.setIntensity(g_brit);
+    appMode = MODE_NORMAL;
+}
+
+static void do_tap() {
+    TapResult r = tapTempo.tap();
+    if (r.wentLive) {
+        go_live(tapTempo.bpm(), tapTempo.sessionStartMs());
+        printf("Live: %.1f BPM\n", tapTempo.bpm());
+    } else if (r.bpmChanged && linkEnabled) {
+        set_link_tempo(tapTempo.bpm());
+        printf("Tap: %.1f BPM\n", tapTempo.bpm());
+    } else if (r.newSession) {
+        if (linkEnabled) reset_downbeat();
+        printf("New session — tap 3 more times\n");
+    }
+}
 
 static void handle_button() {
     int      reading = gpio_get_level(PIN_TAP_BUTTON);
     uint32_t now     = now_ms();
-
     if (reading == 0 && lastButton == 1 && (now - lastDebounce) > DEBOUNCE_MS) {
         lastDebounce = now;
-
-        TapResult r = tapTempo.tap();
-
-        if (r.wentLive) {
-            go_live(tapTempo.bpm(), tapTempo.sessionStartMs());
-            printf("Live: %.1f BPM\n", tapTempo.bpm());
-        } else if (r.bpmChanged && linkEnabled) {
-            set_link_tempo(tapTempo.bpm());
-            printf("Tap: %.1f BPM  peers: %llu\n", tapTempo.bpm(),
-                   (unsigned long long)abl_link_num_peers(s_link));
-        } else if (r.newSession) {
-            printf("New session — tap 3 more times\n");
-        }
+        if (appMode != MODE_NORMAL) exit_menu();
+        do_tap();
     }
-
     lastButton = reading;
 }
 
@@ -199,15 +360,30 @@ static void handle_encoder() {
     int      sw  = gpio_get_level(PIN_ENC_SW);
     uint32_t now = now_ms();
 
+    // ── Turn ──────────────────────────────────────────────────────────────────
     if (a == 0 && lastEncA == 1 && (now - lastEncTurn) > DEBOUNCE_MS) {
         lastEncTurn = now;
-        if (appMode == MODE_MENU) {
-            menuSelIdx    = (b == 1)
-                            ? (menuSelIdx + 1) % kSigCount
-                            : (menuSelIdx + kSigCount - 1) % kSigCount;
-            menuEnteredAt = now;  // reset timeout on interaction
-        } else if (linkEnabled) {
-            double newBpm = tapTempo.bpm() + (b == 1 ? ENC_BPM_STEP : -ENC_BPM_STEP);
+        int dir = (b == 1) ? 1 : -1;
+
+        if (appMode == MODE_MENU_NAV) {
+            menuItem      = (menuItem + MENU_COUNT + dir) % MENU_COUNT;
+            menuEnteredAt = now;
+        } else if (appMode == MODE_MENU_EDIT) {
+            int lo = menu_val_min(menuItem);
+            int hi = menu_val_max(menuItem);
+            if (menuItem == MENU_BRIT) {
+                menuEditVal += dir;
+                if (menuEditVal < lo) menuEditVal = lo;
+                if (menuEditVal > hi) menuEditVal = hi;
+                display.setIntensity(menuEditVal);  // live brightness preview
+            } else {
+                int range   = hi - lo + 1;
+                menuEditVal = lo + ((menuEditVal - lo + dir + range) % range);
+            }
+            menuEnteredAt = now;
+        } else if (appMode == MODE_NORMAL && linkEnabled) {
+            abl_link_capture_app_session_state(s_link, s_session);
+            double newBpm = abl_link_tempo(s_session) + dir * g_bpmStep;
             tapTempo.setBpm(newBpm);
             set_link_tempo(tapTempo.bpm());
             printf("Enc: %.1f BPM\n", tapTempo.bpm());
@@ -215,86 +391,90 @@ static void handle_encoder() {
     }
     lastEncA = a;
 
+    // ── Press ─────────────────────────────────────────────────────────────────
     if (sw == 0 && lastEncSw == 1 && (now - lastEncSwDb) > DEBOUNCE_MS) {
         lastEncSwDb = now;
+
         if (appMode == MODE_NORMAL) {
-            appMode       = MODE_MENU;
+            menuItem      = 0;
+            appMode       = MODE_MENU_NAV;
             menuEnteredAt = now;
-            for (int i = 0; i < kSigCount; i++) {
-                if (kSignatures[i] == linkQuantum) { menuSelIdx = i; break; }
+        } else if (appMode == MODE_MENU_NAV) {
+            if (menuItem == MENU_RESET) {
+                appMode       = MODE_MENU_CONFIRM;
+                menuEnteredAt = now;
+            } else {
+                menuEditVal   = menu_get_val(menuItem);
+                appMode       = MODE_MENU_EDIT;
+                menuEnteredAt = now;
             }
-        } else {
-            linkQuantum = kSignatures[menuSelIdx];
-            appMode     = MODE_NORMAL;
-            printf("Time sig: %.0f\n", linkQuantum);
+        } else if (appMode == MODE_MENU_EDIT) {
+            menu_commit(menuItem, menuEditVal);
+            apply_settings();
+            nvs_save_settings();
+            appMode       = MODE_MENU_NAV;
+            menuEnteredAt = now;
+        } else if (appMode == MODE_MENU_CONFIRM) {
+            factory_reset();
+            appMode = MODE_NORMAL;
         }
     }
     lastEncSw = sw;
 }
 
 static void check_menu_timeout() {
-    if (appMode == MODE_MENU && (now_ms() - menuEnteredAt) >= MENU_TIMEOUT_MS) {
-        appMode = MODE_NORMAL;
-    }
+    if (appMode == MODE_NORMAL) return;
+    if ((now_ms() - menuEnteredAt) < MENU_TIMEOUT_MS) return;
+    if (appMode == MODE_MENU_EDIT && menuItem == MENU_BRIT)
+        display.setIntensity(g_brit);
+    appMode = MODE_NORMAL;
 }
 
-// ── OSC server ───────────────────────────────────────────────────────────────
+// ── OSC server ─────────────────────────────────────────────────────────────────
 
 static uint32_t osc_u32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
+           ((uint32_t)p[2] <<  8) |  (uint32_t)p[3];
 }
 
 static float osc_float(const uint8_t *p) {
-    uint32_t u = osc_u32(p);
-    float f; memcpy(&f, &u, 4); return f;
+    uint32_t u = osc_u32(p); float f; memcpy(&f, &u, 4); return f;
 }
 
 static void osc_handle(const uint8_t *buf, int len) {
-    // Null-terminate so string functions are safe
     if (len < 4) return;
-
-    const char *addr = (const char *)buf;
-    int addr_bytes   = ((strlen(addr) + 4) & ~3);   // padded length incl. null
+    const char *addr       = (const char *)buf;
+    int         addr_bytes = ((strlen(addr) + 4) & ~3);
     if (addr_bytes >= len) return;
-
-    const char *tags = (const char *)(buf + addr_bytes);
+    const char *tags       = (const char *)(buf + addr_bytes);
     if (tags[0] != ',') return;
-    int tags_bytes = ((strlen(tags) + 4) & ~3);
-    const uint8_t *args = buf + addr_bytes + tags_bytes;
-    int args_len        = len - addr_bytes - tags_bytes;
+    int         tags_bytes = ((strlen(tags) + 4) & ~3);
+    const uint8_t *args    = buf + addr_bytes + tags_bytes;
+    int         args_len   = len - addr_bytes - tags_bytes;
 
     if (strcmp(addr, "/tap") == 0) {
         TapResult r = tapTempo.tap();
-        if (r.wentLive) {
-            go_live(tapTempo.bpm(), tapTempo.sessionStartMs());
-            printf("OSC live: %.1f BPM\n", tapTempo.bpm());
-        } else if (r.bpmChanged && linkEnabled) {
-            set_link_tempo(tapTempo.bpm());
-            printf("OSC tap: %.1f BPM\n", tapTempo.bpm());
-        } else if (r.newSession) {
-            printf("OSC tap: new session\n");
-        }
+        if (r.wentLive)                       { go_live(tapTempo.bpm(), tapTempo.sessionStartMs()); printf("OSC live: %.1f BPM\n", tapTempo.bpm()); }
+        else if (r.bpmChanged && linkEnabled) { set_link_tempo(tapTempo.bpm()); printf("OSC tap: %.1f BPM\n", tapTempo.bpm()); }
+        else if (r.newSession)                { printf("OSC tap: new session\n"); }
     } else if (strcmp(addr, "/bpm") == 0 && args_len >= 4) {
-        float bpm = (tags[1] == 'f') ? osc_float(args)
-                                     : (float)(int32_t)osc_u32(args);
+        float bpm = (tags[1] == 'f') ? osc_float(args) : (float)(int32_t)osc_u32(args);
         tapTempo.setBpm(bpm);
         set_link_tempo(tapTempo.bpm());
         printf("OSC bpm: %.1f\n", tapTempo.bpm());
     } else if (strcmp(addr, "/nudge_up") == 0) {
-        nudge_phase(NUDGE_US);
-        printf("OSC nudge +20ms\n");
+        nudge_phase(g_nudgeUs);
+        printf("OSC nudge +%dms\n", kNudgeMs[g_nudgIdx]);
     } else if (strcmp(addr, "/nudge_down") == 0) {
-        nudge_phase(-NUDGE_US);
-        printf("OSC nudge -20ms\n");
+        nudge_phase(-g_nudgeUs);
+        printf("OSC nudge -%dms\n", kNudgeMs[g_nudgIdx]);
     } else if (strcmp(addr, "/downbeat") == 0) {
         reset_downbeat();
         printf("OSC downbeat reset\n");
     } else if (strcmp(addr, "/signature") == 0 && args_len >= 4) {
-        int sig = (tags[1] == 'f') ? (int)osc_float(args)
-                                   : (int)(int32_t)osc_u32(args);
+        int sig = (tags[1] == 'f') ? (int)osc_float(args) : (int)(int32_t)osc_u32(args);
         for (int i = 0; i < kSigCount; i++) {
-            if ((int)kSignatures[i] == sig) { linkQuantum = kSignatures[i]; break; }
+            if ((int)kSignatures[i] == sig) { g_sigIdx = i; apply_settings(); break; }
         }
         printf("OSC signature: %d\n", sig);
     }
@@ -303,13 +483,11 @@ static void osc_handle(const uint8_t *buf, int len) {
 static void osc_task(void *) {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) { vTaskDelete(nullptr); return; }
-
     struct sockaddr_in addr = {};
     addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port        = htons(OSC_PORT);
     bind(sock, (struct sockaddr *)&addr, sizeof(addr));
-
     static uint8_t buf[256];
     while (true) {
         int n = recv(sock, buf, sizeof(buf) - 1, 0);
@@ -317,60 +495,48 @@ static void osc_task(void *) {
     }
 }
 
-// ── Status ────────────────────────────────────────────────────────────────────
+// ── Status ─────────────────────────────────────────────────────────────────────
 
 static void print_status() {
     static uint32_t lastPrint = 0;
     if (now_ms() - lastPrint < 2000) return;
     lastPrint = now_ms();
-
-    if (!linkEnabled) {
-        printf("Cold start — tap 4 times to go live\n");
-        return;
-    }
-
+    if (!linkEnabled) { printf("Cold start — tap 4 times to go live\n"); return; }
     abl_link_capture_app_session_state(s_link, s_session);
     printf("Link: %.2f BPM  sig: %.0f  peers: %llu  eth: %s\n",
-           abl_link_tempo(s_session),
-           linkQuantum,
+           abl_link_tempo(s_session), linkQuantum,
            (unsigned long long)abl_link_num_peers(s_link),
            ethConnected ? ethIPStr : "disconnected");
 }
 
-// ── GPIO init ─────────────────────────────────────────────────────────────────
+// ── GPIO init ──────────────────────────────────────────────────────────────────
 
 static void init_gpio() {
-    // GPIO35/36/39 are input-only with no internal pull-up — requires external
-    // 10kΩ pull-up resistors to 3.3V on TAP_BUTTON, ENC_A, and ENC_B.
-    const gpio_num_t inputs_no_pullup[] = {
-        PIN_TAP_BUTTON, PIN_ENC_A, PIN_ENC_B
-    };
+    // Encoder board supplies pull-ups on all three encoder pins (A, B, SW).
+    const gpio_num_t inputs_no_pullup[] = { PIN_ENC_SW, PIN_ENC_A, PIN_ENC_B };
     for (gpio_num_t pin : inputs_no_pullup) {
         gpio_config_t cfg = {
-            .pin_bit_mask  = (1ULL << pin),
-            .mode          = GPIO_MODE_INPUT,
-            .pull_up_en    = GPIO_PULLUP_DISABLE,
-            .pull_down_en  = GPIO_PULLDOWN_DISABLE,
-            .intr_type     = GPIO_INTR_DISABLE,
+            .pin_bit_mask = (1ULL << pin),
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
         };
         gpio_config(&cfg);
     }
-
-    // GPIO4 has an internal pull-up (encoder switch).
-    gpio_config_t enc_sw_cfg = {
-        .pin_bit_mask  = (1ULL << PIN_ENC_SW),
-        .mode          = GPIO_MODE_INPUT,
-        .pull_up_en    = GPIO_PULLUP_ENABLE,
-        .pull_down_en  = GPIO_PULLDOWN_DISABLE,
-        .intr_type     = GPIO_INTR_DISABLE,
+    gpio_config_t tap_cfg = {
+        .pin_bit_mask = (1ULL << PIN_TAP_BUTTON),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
     };
-    gpio_config(&enc_sw_cfg);
+    gpio_config(&tap_cfg);
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Entry point ────────────────────────────────────────────────────────────────
 
 extern "C" void app_main(void) {
-    // NVS — required by the networking stack
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
@@ -381,9 +547,8 @@ extern "C" void app_main(void) {
     esp_netif_init();
 
     init_gpio();
-
     display.init();
-    display.setIntensity(8);
+    nvs_load_settings();
 
     initEthernet();
 
