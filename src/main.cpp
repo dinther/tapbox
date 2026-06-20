@@ -7,6 +7,7 @@
 #include "nvs.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
@@ -33,11 +34,15 @@
 
 // ── 7-segment characters (D6=A … D0=G) ────────────────────────────────────────
 static constexpr uint8_t CH_a = 0x7D;
+static constexpr uint8_t CH_A = 0x77;
 static constexpr uint8_t CH_b = 0x1F;
+static constexpr uint8_t CH_c = 0x0D;
 static constexpr uint8_t CH_d = 0x3D;
 static constexpr uint8_t CH_e = 0x6F;
 static constexpr uint8_t CH_g = 0x7B;
+static constexpr uint8_t CH_h = 0x17;
 static constexpr uint8_t CH_i = 0x10;
+static constexpr uint8_t CH_I = 0x30;
 static constexpr uint8_t CH_n = 0x15;
 static constexpr uint8_t CH_P = 0x67;
 static constexpr uint8_t CH_r = 0x05;
@@ -55,11 +60,15 @@ static const int    kStepCount    = 4;
 static const int    kNudgeMs[]    = { 5, 10, 20, 50, 100 };
 static const int    kNudgeCount   = 5;
 
-// ── Persistent settings (indices into tables, or direct values) ────────────────
-static int g_sigIdx  = 2;  // kSignatures[2] = 4/4
-static int g_stepIdx = 0;  // kBpmSteps[0]   = 0.1 BPM
-static int g_nudgIdx = 2;  // kNudgeMs[2]    = 20 ms
-static int g_brit    = 7;  // brightness 1–15
+// ── Persistent settings ────────────────────────────────────────────────────────
+static int g_sigIdx  = 2;              // kSignatures[2] = 4/4
+static int g_stepIdx = 0;              // kBpmSteps[0]   = 0.1 BPM
+static int g_nudgIdx = 2;              // kNudgeMs[2]    = 20 ms
+static int g_brit    = 7;              // brightness 1–15
+static int g_net     = 0;              // 0=DHCP, 1=static
+static int g_ip[4]   = {0, 0, 0, 0};
+static int g_sn[4]   = {0, 0, 0, 0};
+static int g_gt[4]   = {0, 0, 0, 0};
 
 // ── Runtime values derived from settings ──────────────────────────────────────
 static double g_bpmStep = 0.1;
@@ -86,7 +95,15 @@ enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM };
 static AppMode  appMode       = MODE_NORMAL;
 static uint32_t menuEnteredAt = 0;
 
-enum MenuIdx { MENU_SIG = 0, MENU_STEP, MENU_NUDG, MENU_BRIT, MENU_RESET, MENU_COUNT };
+enum MenuIdx {
+    MENU_SIG = 0, MENU_STEP, MENU_NUDG, MENU_BRIT,
+    MENU_NET,
+    MENU_IP1, MENU_IP2, MENU_IP3, MENU_IP4,
+    MENU_SN1, MENU_SN2, MENU_SN3, MENU_SN4,
+    MENU_GT1, MENU_GT2, MENU_GT3, MENU_GT4,
+    MENU_RESET,
+    MENU_COUNT  // 18
+};
 static int menuItem    = 0;
 static int menuEditVal = 0;
 
@@ -114,6 +131,19 @@ static void nvs_load_settings() {
     if (nvs_get_i32(h, "step", &v) == ESP_OK && v >= 0 && v < kStepCount)  g_stepIdx = (int)v;
     if (nvs_get_i32(h, "nudg", &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgIdx = (int)v;
     if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 1 && v <= 15)         g_brit    = (int)v;
+    if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net     = (int)v;
+    if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]   = (int)v;
+    if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]   = (int)v;
+    if (nvs_get_i32(h, "ip2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[2]   = (int)v;
+    if (nvs_get_i32(h, "ip3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[3]   = (int)v;
+    if (nvs_get_i32(h, "sn0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[0]   = (int)v;
+    if (nvs_get_i32(h, "sn1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[1]   = (int)v;
+    if (nvs_get_i32(h, "sn2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[2]   = (int)v;
+    if (nvs_get_i32(h, "sn3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[3]   = (int)v;
+    if (nvs_get_i32(h, "gt0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[0]   = (int)v;
+    if (nvs_get_i32(h, "gt1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[1]   = (int)v;
+    if (nvs_get_i32(h, "gt2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[2]   = (int)v;
+    if (nvs_get_i32(h, "gt3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[3]   = (int)v;
     nvs_close(h);
     apply_settings();
 }
@@ -125,17 +155,39 @@ static void nvs_save_settings() {
     nvs_set_i32(h, "step", (int32_t)g_stepIdx);
     nvs_set_i32(h, "nudg", (int32_t)g_nudgIdx);
     nvs_set_i32(h, "brit", (int32_t)g_brit);
+    nvs_set_i32(h, "net",  (int32_t)g_net);
+    nvs_set_i32(h, "ip0",  (int32_t)g_ip[0]);
+    nvs_set_i32(h, "ip1",  (int32_t)g_ip[1]);
+    nvs_set_i32(h, "ip2",  (int32_t)g_ip[2]);
+    nvs_set_i32(h, "ip3",  (int32_t)g_ip[3]);
+    nvs_set_i32(h, "sn0",  (int32_t)g_sn[0]);
+    nvs_set_i32(h, "sn1",  (int32_t)g_sn[1]);
+    nvs_set_i32(h, "sn2",  (int32_t)g_sn[2]);
+    nvs_set_i32(h, "sn3",  (int32_t)g_sn[3]);
+    nvs_set_i32(h, "gt0",  (int32_t)g_gt[0]);
+    nvs_set_i32(h, "gt1",  (int32_t)g_gt[1]);
+    nvs_set_i32(h, "gt2",  (int32_t)g_gt[2]);
+    nvs_set_i32(h, "gt3",  (int32_t)g_gt[3]);
     nvs_commit(h);
     nvs_close(h);
 }
 
 static void factory_reset() {
     g_sigIdx = 2; g_stepIdx = 0; g_nudgIdx = 2; g_brit = 7;
+    g_net = 0;
+    g_ip[0] = g_ip[1] = g_ip[2] = g_ip[3] = 0;
+    g_sn[0] = g_sn[1] = g_sn[2] = g_sn[3] = 0;
+    g_gt[0] = g_gt[1] = g_gt[2] = g_gt[3] = 0;
     nvs_save_settings();
     apply_settings();
 }
 
 // ── Menu value helpers ─────────────────────────────────────────────────────────
+
+static bool menu_item_visible(int item) {
+    if (item >= MENU_IP1 && item <= MENU_GT4) return g_net == 1;
+    return true;
+}
 
 static int menu_get_val(int item) {
     switch (item) {
@@ -143,7 +195,14 @@ static int menu_get_val(int item) {
         case MENU_STEP: return g_stepIdx;
         case MENU_NUDG: return g_nudgIdx;
         case MENU_BRIT: return g_brit;
-        default:        return 0;
+        case MENU_NET:  return g_net;
+        case MENU_IP1: case MENU_IP2: case MENU_IP3: case MENU_IP4:
+            return g_ip[item - MENU_IP1];
+        case MENU_SN1: case MENU_SN2: case MENU_SN3: case MENU_SN4:
+            return g_sn[item - MENU_SN1];
+        case MENU_GT1: case MENU_GT2: case MENU_GT3: case MENU_GT4:
+            return g_gt[item - MENU_GT1];
+        default: return 0;
     }
 }
 
@@ -155,7 +214,12 @@ static int menu_val_max(int item) {
         case MENU_STEP: return kStepCount  - 1;
         case MENU_NUDG: return kNudgeCount - 1;
         case MENU_BRIT: return 15;
-        default:        return 0;
+        case MENU_NET:  return 1;
+        case MENU_IP1: case MENU_IP2: case MENU_IP3: case MENU_IP4:
+        case MENU_SN1: case MENU_SN2: case MENU_SN3: case MENU_SN4:
+        case MENU_GT1: case MENU_GT2: case MENU_GT3: case MENU_GT4:
+            return 255;
+        default: return 0;
     }
 }
 
@@ -165,17 +229,38 @@ static void menu_commit(int item, int val) {
         case MENU_STEP: g_stepIdx = val; break;
         case MENU_NUDG: g_nudgIdx = val; break;
         case MENU_BRIT: g_brit    = val; break;
+        case MENU_NET:  g_net     = val; break;
+        case MENU_IP1: case MENU_IP2: case MENU_IP3: case MENU_IP4:
+            g_ip[item - MENU_IP1] = val; break;
+        case MENU_SN1: case MENU_SN2: case MENU_SN3: case MENU_SN4:
+            g_sn[item - MENU_SN1] = val; break;
+        case MENU_GT1: case MENU_GT2: case MENU_GT3: case MENU_GT4:
+            g_gt[item - MENU_GT1] = val; break;
     }
 }
 
 // ── Display ────────────────────────────────────────────────────────────────────
 
+// Digit segment bytes for use in static label arrays: 0=0x7E 1=0x30 2=0x6D 3=0x79 4=0x33
 static const uint8_t kMenuLabels[MENU_COUNT][4] = {
-    { CH_b, CH_e, CH_a, CH_t },  // beat (time signature)
-    { CH_S, CH_t, CH_e, CH_P },  // StEP
-    { CH_n, CH_u, CH_d, CH_g },  // nudg
-    { CH_b, CH_r, CH_i, CH_t },  // brit
-    { CH_r, CH_S, CH_e, CH_t },  // rSet
+    { CH_b, CH_e, CH_a, CH_t                      },  // beat
+    { CH_S, CH_t, CH_e, CH_P                      },  // StEP
+    { CH_n, CH_u, CH_d, CH_g                      },  // nudg
+    { CH_b, CH_r, CH_i, CH_t                      },  // brit
+    { CH_n, CH_e, CH_t, MAX7219Display::SEG_BLANK },  // net
+    { CH_I, CH_P, MAX7219Display::SEG_BLANK, 0x30 },  // IP 1
+    { CH_I, CH_P, MAX7219Display::SEG_BLANK, 0x6D },  // IP 2
+    { CH_I, CH_P, MAX7219Display::SEG_BLANK, 0x79 },  // IP 3
+    { CH_I, CH_P, MAX7219Display::SEG_BLANK, 0x33 },  // IP 4
+    { CH_S, CH_n, MAX7219Display::SEG_BLANK, 0x30 },  // Sn 1
+    { CH_S, CH_n, MAX7219Display::SEG_BLANK, 0x6D },  // Sn 2
+    { CH_S, CH_n, MAX7219Display::SEG_BLANK, 0x79 },  // Sn 3
+    { CH_S, CH_n, MAX7219Display::SEG_BLANK, 0x33 },  // Sn 4
+    { CH_g, CH_t, MAX7219Display::SEG_BLANK, 0x30 },  // Gt 1
+    { CH_g, CH_t, MAX7219Display::SEG_BLANK, 0x6D },  // Gt 2
+    { CH_g, CH_t, MAX7219Display::SEG_BLANK, 0x79 },  // Gt 3
+    { CH_g, CH_t, MAX7219Display::SEG_BLANK, 0x33 },  // Gt 4
+    { CH_r, CH_S, CH_e, CH_t                      },  // rSet
 };
 
 static void render_int3(uint8_t *segs, int val) {
@@ -203,6 +288,19 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             render_int3(segs, kNudgeMs[val]);
             break;
         case MENU_BRIT:
+            render_int3(segs, val);
+            break;
+        case MENU_NET:
+            // 4-char value fills positions 4-7, overriding the blank separator
+            if (val == 0) {
+                segs[4] = CH_d; segs[5] = CH_h; segs[6] = CH_c; segs[7] = CH_P;
+            } else {
+                segs[4] = CH_S; segs[5] = CH_t; segs[6] = CH_A; segs[7] = CH_t;
+            }
+            break;
+        case MENU_IP1: case MENU_IP2: case MENU_IP3: case MENU_IP4:
+        case MENU_SN1: case MENU_SN2: case MENU_SN3: case MENU_SN4:
+        case MENU_GT1: case MENU_GT2: case MENU_GT3: case MENU_GT4:
             render_int3(segs, val);
             break;
         case MENU_RESET:
@@ -233,13 +331,11 @@ static void update_display() {
             int units    = (bpmX10 / 10)  % 10;
             int tenths   = bpmX10 % 10;
 
-            segs[0] = hundreds          ? MAX7219Display::digit(hundreds) : MAX7219Display::SEG_BLANK;
-            segs[1] = (hundreds || tens) ? MAX7219Display::digit(tens)    : MAX7219Display::SEG_BLANK;
+            segs[0] = hundreds           ? MAX7219Display::digit(hundreds) : MAX7219Display::SEG_BLANK;
+            segs[1] = (hundreds || tens) ? MAX7219Display::digit(tens)     : MAX7219Display::SEG_BLANK;
             segs[2] = MAX7219Display::digit(units) | MAX7219Display::SEG_DP;
             segs[3] = MAX7219Display::digit(tenths);
-            // segs[4] blank
             segs[5] = MAX7219Display::digit((int)floor(phase) + 1);
-            // segs[6] blank
             segs[7] = MAX7219Display::digit(peers > 9 ? 9 : peers);
         }
         display.setSegments(segs);
@@ -247,7 +343,6 @@ static void update_display() {
     }
 
     if (appMode == MODE_MENU_CONFIRM) {
-        // "rSEt SurE" across all 8 digits
         segs[0] = CH_r; segs[1] = CH_S; segs[2] = CH_e; segs[3] = CH_t;
         segs[4] = CH_S; segs[5] = CH_u; segs[6] = CH_r; segs[7] = CH_e;
         display.setSegments(segs);
@@ -256,13 +351,25 @@ static void update_display() {
 
     // MODE_MENU_NAV or MODE_MENU_EDIT
     memcpy(segs, kMenuLabels[menuItem], 4);
-    // segs[4] stays blank
 
     int  val   = (appMode == MODE_MENU_EDIT) ? menuEditVal : menu_get_val(menuItem);
     bool blank = (appMode == MODE_MENU_EDIT) && ((now_ms() / 250) & 1);
     if (!blank) render_menu_value(segs, menuItem, val);
 
     display.setSegments(segs);
+}
+
+// ── Boot reboot display ────────────────────────────────────────────────────────
+
+static void show_boot_reboot() {
+    uint8_t segs[8] = {};
+    segs[0] = CH_b;
+    segs[1] = MAX7219Display::digit(0);  // O
+    segs[2] = MAX7219Display::digit(0);  // O
+    segs[3] = CH_t;
+    display.setSegments(segs);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
 }
 
 // ── IP splash ──────────────────────────────────────────────────────────────────
@@ -366,7 +473,11 @@ static void handle_encoder() {
         int dir = (b == 1) ? 1 : -1;
 
         if (appMode == MODE_MENU_NAV) {
-            menuItem      = (menuItem + MENU_COUNT + dir) % MENU_COUNT;
+            // Advance, skipping items not visible in the current net mode
+            int next = menuItem;
+            do { next = (next + MENU_COUNT + dir) % MENU_COUNT; }
+            while (!menu_item_visible(next));
+            menuItem      = next;
             menuEnteredAt = now;
         } else if (appMode == MODE_MENU_EDIT) {
             int lo = menu_val_min(menuItem);
@@ -375,7 +486,7 @@ static void handle_encoder() {
                 menuEditVal += dir;
                 if (menuEditVal < lo) menuEditVal = lo;
                 if (menuEditVal > hi) menuEditVal = hi;
-                display.setIntensity(menuEditVal);  // live brightness preview
+                display.setIntensity(menuEditVal);
             } else {
                 int range   = hi - lo + 1;
                 menuEditVal = lo + ((menuEditVal - lo + dir + range) % range);
@@ -412,6 +523,9 @@ static void handle_encoder() {
             menu_commit(menuItem, menuEditVal);
             apply_settings();
             nvs_save_settings();
+            if (menuItem == MENU_NET) {
+                show_boot_reboot();  // does not return
+            }
             appMode       = MODE_MENU_NAV;
             menuEnteredAt = now;
         } else if (appMode == MODE_MENU_CONFIRM) {
@@ -550,7 +664,7 @@ extern "C" void app_main(void) {
     display.init();
     nvs_load_settings();
 
-    initEthernet();
+    initEthernet(g_net, g_ip, g_sn, g_gt);
 
     printf("Waiting for Ethernet");
     uint32_t start = now_ms();
