@@ -40,7 +40,7 @@ On startup, tapbox starts a new Link session immediately at 120 BPM and adapts t
 
 ## Setting the Tempo
 
-Tap the button in rhythm. The downbeat is immediately defined by the first tap for the link session. tapbox only starts adjusting tempo of the link session after 4 taps. Current tempo and beat progress is displayed live at all times.
+Tap the button in rhythm. The downbeat for the link session is immediately defined by the first tap. It takes three more taps before tapbox starts to adjust the tempo of the link session. The current tempo and beat progress is displayed live at all times.
 
 You do not have to be perfectly precise. tapbox averages the timing across all your taps, so the more taps in sequence, the more accurate the reading becomes.
 
