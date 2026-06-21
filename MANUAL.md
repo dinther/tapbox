@@ -6,7 +6,7 @@
 
 tapbox is a compact, dedicated tempo controller for musicians and live performers who use Ableton Link. It sits on your desk or in your rack, connects to your network via Ethernet, and keeps every device in your setup locked to the same beat — without you having to touch a laptop.
 
-The idea is simple: tap the button a few times to set your tempo, and tapbox broadcasts it to every Link-enabled device on the network. Your Ableton Live session, your iOS apps, your hardware synths with Link support — they all lock in instantly. From that point on you can nudge the tempo up or down with the encoder knob, or send commands from a phone or tablet over OSC if you prefer to stay hands-free.
+The idea is simple: tap the button on the beat to set your tempo, and tapbox broadcasts it to every Link-enabled device on the network. Your Ableton Live session, Resolume, MadMapper, LaserOS, your iOS apps, your hardware synths with Link support — they all lock in instantly. From that point on you can nudge the tempo up or down with the encoder knob, or send commands from a phone or tablet over OSC if you prefer to stay hands-free.
 
 tapbox is always on, always listening, and always in sync.
 
@@ -24,15 +24,15 @@ tapbox uses an 8-digit display that shows you everything you need at a glance. I
 
 Reading left to right:
 
-- **120.0** — the current tempo in BPM, updated in real time as the Link session adjusts
+- **120.0** — the current tempo in BPM, updated in real time when members in the Link session adjust
 - **3** — which beat of the bar you are on right now (this advances with the music)
 - **2** — how many other Link peers are connected to the session
 
-On startup, tapbox joins the Link session immediately at 120 BPM. You can tap a new tempo whenever you are ready, or simply start adjusting from 120 using the encoder knob.
+On startup, tapbox starts a new Link session immediately at 120 BPM and adapts the speed to the existing session if one exists. You can tap a new tempo whenever you are ready, or simply start adjusting the BPM using the encoder knob.
 
 ### The Controls
 
-**Tap button** — the main button. Tap it in time with your music to set the tempo. Also exits the menu immediately if you need to get back to playing in a hurry.
+**Tap button** — the main button. Tap it in time with your music to set the tempo. A single tap will instantly sync the session to the down beat. (first beat in a bar). Tap also exits the menu immediately if you need to get back to playing in a hurry.
 
 **Encoder knob** — turn it to nudge the tempo up or down while playing. Press it to open the settings menu.
 
@@ -40,15 +40,15 @@ On startup, tapbox joins the Link session immediately at 120 BPM. You can tap a 
 
 ## Setting the Tempo
 
-Tap the button four times in rhythm and tapbox locks in the BPM and announces it to the Link session. After the fourth tap, the display lights up with the tempo and the beat counter starts running.
+Tap the button in rhythm. The downbeat is immediately defined by the first tap for the link session. tapbox only starts adjusting tempo of the link session after 4 taps. Current tempo and beat progress is displayed live at all times.
 
-You do not have to be perfectly precise. tapbox averages the timing across all your taps, so the more you tap, the more accurate the reading becomes. Think of it like a conductor giving a clear downbeat — a few firm, confident taps is all it takes.
+You do not have to be perfectly precise. tapbox averages the timing across all your taps, so the more taps in sequence, the more accurate the reading becomes.
 
-After you are locked in, any further taps continue to refine the tempo. If you stop tapping for two seconds, tapbox considers the session established and waits quietly. If you tap again after that pause, it treats it as the start of a new tempo reading.
+After you are locked in, any further taps continue to refine the tempo. tapbox considers the session established when you stop tapping for two seconds. Simply start tapping again to define a new tempo.
 
 ### Adjusting Tempo on the Fly
 
-Once you are live, turning the encoder knob trims the tempo up or down in small steps. This is ideal for those moments when the energy of the room calls for pushing the track just a touch faster, or pulling it back slightly to let a breakdown breathe. The change is immediate and smooth, and every connected device follows along.
+Turning the encoder knob adjusts the tempo up or down in small steps. This is ideal when you require a gradual tempo change called for by the music or when you slowly want to catch up with the downbeat that drifted away. The change is subtle and smooth, and every connected device follows along.
 
 The size of each step depends on the **Acc.** setting in the menu.
 
@@ -60,7 +60,7 @@ tapbox connects via the Ethernet port on the back. Plug in a standard network ca
 
 On startup, tapbox displays the IP address it has been assigned across two brief screens — first the first two octets, then the last two. This tells you where to find it on the network if you want to send OSC commands.
 
-By default tapbox uses DHCP, meaning your router assigns it an address automatically. If you need a fixed, predictable address — for example, to lock in OSC routing from a DAW template that always sends to the same destination — you can configure a static IP in the menu.
+By default tapbox uses DHCP, meaning your router assigns it an address automatically. If you need a fixed, predictable address — for example, to lock in OSC routing from a DAW template that always sends to the same destination — you can configure a static IP, subnet and gateway in the menu.
 
 ---
 
