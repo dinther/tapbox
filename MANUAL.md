@@ -28,11 +28,11 @@ Reading left to right:
 - **3** — which beat of the bar you are on right now (this advances with the music)
 - **2** — how many other Link peers are connected to the session
 
-On startup, tapbox starts a new Link session immediately at 120 BPM and adapts the speed to the existing session if one exists. You can tap a new tempo whenever you are ready, or simply start adjusting the BPM using the encoder knob.
+On startup, tapbox starts with the tempo of the existing link session if one exists otherwise it starts with the default tempo of 120 BPM. You can tap a new tempo whenever you are ready, or simply start adjusting the tempo using the encoder knob.
 
 ### The Controls
 
-**Tap button** — the main button. Tap it in time with your music to set the tempo. A single tap will instantly sync the session to the down beat. (first beat in a bar). Tap also exits the menu immediately if you need to get back to playing in a hurry.
+**Tap button** — the main button. Tap it in time with your music to set the tempo. A single tap will instantly sync the link session to the downbeat. (first beat in a bar). Tap also exits the menu immediately if you need to get back to playing in a hurry.
 
 **Encoder knob** — turn it to nudge the tempo up or down while playing. Press it to open the settings menu.
 
