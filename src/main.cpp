@@ -18,7 +18,7 @@
 #include "lwip/sockets.h"
 
 // ── Pin assignments ────────────────────────────────────────────────────────────
-#define PIN_TAP_BUTTON  GPIO_NUM_4
+#define PIN_TAP_BUTTON  GPIO_NUM_12
 #define PIN_ENC_A       GPIO_NUM_36
 #define PIN_ENC_B       GPIO_NUM_39
 #define PIN_ENC_SW      GPIO_NUM_35
