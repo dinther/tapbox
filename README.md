@@ -14,9 +14,9 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
 - **Menu system** — on-device configuration with NVS persistence across power cycles
 - **Static or DHCP** — configure IP address, subnet, and gateway via menu
-- **IP splash on boot** — displays assigned IP address across two screens at startup
+- **IP ticker on boot** — scrolls connection type and IP address across the display at startup (`Eth`, `SSID`, or `AP`)
 - **Battery level** — optional SoC readout via voltage divider on IO36
-- **OTA updates** — pull and flash new firmware directly from the menu over Ethernet
+- **OTA updates** — hold both buttons at power-on to flash latest firmware over Ethernet or WiFi
 
 ## Hardware
 
@@ -76,15 +76,17 @@ Value flashes at 4 Hz in edit mode.
 | `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |
 | `Hub.` | Gateway | sub-menu: Oct1–Oct4, 0–255 each |
 | `rSEt` | Factory reset | confirm with second select press |
-| `UPd.` | OTA firmware update | downloads firmware.bin from GitHub Pages and reboots (Ethernet required) |
 | `vEr ` | Firmware version | read-only; shows major.minor.patch |
 | `bAt ` | Battery level | read-only; shows 0–100 (requires IO36 voltage divider) |
-| `AP  ` | WiFi access point | restarts the "tapbox" config AP |
 | `done` | Exit menu | returns to normal mode |
 
 `Acc.` controls both the tap auto-increment step and the OSC nudge amount.  
 `IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
 Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
+
+## Firmware Update
+
+Hold both the **tap button** and **select button** while powering on. tapbox boots normally and runs the OTA update as soon as it obtains a network connection — over Ethernet or WiFi. The display shows `UPd.` with a progress percentage, then reboots on success.
 
 ## WiFi
 
@@ -92,7 +94,7 @@ tapbox prefers Ethernet. WiFi is used automatically when no Ethernet cable is pr
 
 **First-time setup:**
 
-1. Boot tapbox without an Ethernet cable (or use the `AP` menu item).
+1. Boot tapbox without an Ethernet cable.
 2. Connect your phone or laptop to the **tapbox** open WiFi network.
 3. Open **http://192.168.4.1** in a browser.
 4. Enter your WiFi SSID and password, adjust any other settings, and tap **Save**.
@@ -100,7 +102,7 @@ tapbox prefers Ethernet. WiFi is used automatically when no Ethernet cable is pr
 
 The ESP32 radio supports **2.4 GHz only**. If your router broadcasts separate 2.4 GHz and 5 GHz SSIDs, use the 2.4 GHz one.
 
-WiFi shuts down automatically after 60 seconds if no connection is established.
+If WiFi credentials are stored but the connection fails, tapbox falls back to AP mode automatically so you can reconfigure without a factory reset.
 
 ## OSC Interface
 

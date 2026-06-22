@@ -54,7 +54,7 @@ After you are locked in, any further taps continue to refine the tempo. tapbox c
 
 ### Ethernet
 
-Plug a standard network cable into the Ethernet port before powering on. tapbox displays the assigned IP address across two brief screens at startup — first the first two octets, then the last two. This tells you where to find it on the network for OSC control.
+Plug a standard network cable into the Ethernet port before powering on. tapbox scrolls the connection type and assigned IP address across the display at startup — for example `Eth 192.168.1.55`. This tells you where to find it on the network for OSC control.
 
 Ethernet is always preferred over WiFi. If both are available, tapbox uses Ethernet.
 
@@ -66,17 +66,17 @@ tapbox can connect to your WiFi network and run Ableton Link over it. This is us
 
 #### First-time WiFi setup
 
-1. Boot tapbox without an Ethernet cable plugged in, or select `AP` from the menu at any time.
-2. tapbox creates an open WiFi network called **tapbox**.
+1. Boot tapbox without an Ethernet cable plugged in.
+2. tapbox creates an open WiFi network called **tapbox** and scrolls `AP 192.168.4.1` across the display.
 3. Connect your phone or laptop to the **tapbox** network.
 4. Open **http://192.168.4.1** in your browser.
 5. Enter your WiFi network name (SSID) and password. The SSID field is case-sensitive — copy it exactly from your phone's WiFi list.
 6. Adjust any other settings if needed, then tap **Save**.
-7. tapbox saves the credentials and reboots. It connects to your network as a WiFi client and displays its assigned IP address.
+7. tapbox saves the credentials and reboots. It connects to your network as a WiFi client and scrolls `SSID` followed by the assigned IP address.
 
 #### Changing WiFi credentials later
 
-Select `AP` in the menu. tapbox restarts its access point so you can connect and update the credentials via the same browser page.
+Unplug the Ethernet cable (or boot without one). If the stored credentials fail, tapbox falls back to AP mode automatically — connect to the **tapbox** network and open **http://192.168.4.1** to update them.
 
 #### Automatic Ethernet / WiFi switching
 
@@ -85,7 +85,7 @@ tapbox switches interfaces automatically without a reboot:
 - **Ethernet plugged in** → tapbox stops WiFi and switches Link to Ethernet.
 - **Ethernet unplugged** → tapbox starts WiFi (connecting to stored credentials, or starting the access point if none are stored).
 
-If WiFi does not establish a connection within 60 seconds, it shuts down automatically to save power.
+If WiFi credentials fail to connect, tapbox falls back to AP mode immediately so you can reconfigure without rebooting.
 
 By default tapbox uses DHCP for the Ethernet connection. If you need a fixed address, configure a static IP in the `Lan.` / `IP` / `Sub.` / `Hub.` menu items.
 
@@ -180,20 +180,6 @@ When you select `rSEt` and press select, the display shows `rSEt SurE`. Press se
 
 ---
 
-### UPd. — Firmware Update
-
-**What it does:** downloads the latest firmware from the internet and installs it automatically.
-
-Select `UPd.` and press select. tapbox connects to GitHub over Ethernet and downloads the latest release. The display shows a percentage as the download progresses. When it reaches 100, tapbox shows `donE` and reboots.
-
-If something goes wrong (no network, server unreachable) the display shows `Er` and returns you to the menu without making changes.
-
-**Requirements:** tapbox must be connected to the internet via Ethernet. OTA update does not run over WiFi.
-
-*This item does nothing if the Ethernet cable is unplugged.*
-
----
-
 ### vEr — Firmware Version
 
 **What it does:** shows the firmware version currently running on your tapbox as `major.minor.patch` — for example, version 1.3.0 appears as `1.3.0`. Read-only.
@@ -210,19 +196,19 @@ Accuracy is approximately ±10%. Read-only.
 
 ---
 
-### AP — WiFi Access Point
-
-**What it does:** restarts the tapbox WiFi access point so you can connect and update WiFi credentials or other settings via the browser.
-
-After selecting `AP` and pressing confirm, tapbox creates the **tapbox** open WiFi network. Connect your phone or laptop to it and open **http://192.168.4.1**. The access point shuts down automatically after 60 seconds if no device connects.
-
-Use this item to change which WiFi network tapbox connects to, or to re-enter a password after changing it on the router.
-
----
-
 ### done — Exit Menu
 
 Returns to normal mode immediately.
+
+---
+
+## Firmware Update
+
+To update the firmware, hold both the **tap button** and the **select button** while powering on. Keep holding them until you see activity on the display.
+
+tapbox boots normally — the update runs as soon as it gets a network connection, whether that is Ethernet or WiFi. The display shows `UPd.` followed by a progress percentage. When it reaches 100 it shows `donE` and reboots automatically into the new firmware. If the connection fails or the server is unreachable, the display shows `Er` and tapbox continues to boot normally.
+
+All settings are preserved across updates. Only the firmware changes.
 
 ---
 
@@ -262,14 +248,14 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 
 **2.4 GHz only:** the ESP32 radio does not support 5 GHz WiFi. If your router broadcasts both bands under the same name, tapbox will find the 2.4 GHz one automatically. If it broadcasts them separately, enter the 2.4 GHz SSID.
 
-**Keeping firmware up to date:** navigate to `UPd.` while connected via Ethernet and press select. The update takes about 30 seconds. Settings are not affected.
+**Keeping firmware up to date:** hold both buttons while powering on. The update runs automatically as soon as tapbox gets a network connection — Ethernet or WiFi. Takes about 30 seconds. Settings are not affected.
 
 ---
 
 ## Troubleshooting
 
-**The IP address does not appear at boot.**  
-tapbox could not connect to Ethernet within 10 seconds. Check the cable. If no cable is connected, tapbox will start WiFi instead.
+**No IP address scrolls across the display at boot.**  
+tapbox could not connect to Ethernet within 10 seconds. Check the cable. If no cable is connected, tapbox starts WiFi — the display will scroll the IP once a connection is established, or `AP 192.168.4.1` if it falls back to access point mode.
 
 **tapbox shows dashes on the display after boot.**  
 It is connected to the network but has not received any Link peers yet. This is normal — the display fills in once another Link device joins the session.
@@ -278,7 +264,7 @@ It is connected to the network but has not received any Link peers yet. This is 
 Ensure the other device (e.g. MadMapper on a laptop) is on the same network. Link uses UDP multicast — some routers do not bridge multicast between WiFi and Ethernet. If your PC is on Ethernet and tapbox is on WiFi, try connecting tapbox via Ethernet instead.
 
 **tapbox cannot find my WiFi network (or connects then immediately disconnects).**  
-Check that you entered the SSID exactly as it appears on your phone — SSIDs are case-sensitive. Also confirm the network is 2.4 GHz; the ESP32 cannot connect to 5 GHz networks. Use the `AP` menu item to reopen the config page.
+Check that you entered the SSID exactly as it appears on your phone — SSIDs are case-sensitive. Also confirm the network is 2.4 GHz; the ESP32 cannot connect to 5 GHz networks. If credentials fail, tapbox falls back to AP mode automatically — connect to the **tapbox** network and open **http://192.168.4.1** to correct them.
 
 **My OSC messages are not reaching tapbox.**  
 Confirm the IP address on the display at next boot and update your OSC destination. If using a static IP, verify the address, subnet, and gateway are correct.
