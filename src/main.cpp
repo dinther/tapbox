@@ -249,20 +249,32 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
 
 static int read_battery_pct() {
     if (!s_adc2) return 0;
-    int raw = 0;
-    adc_oneshot_read(s_adc2, ADC_CHANNEL_0, &raw);
-    // 100k/100k divider halves the battery voltage at IO4
-    // ADC_ATTEN_DB_12 full scale ≈ 3100 mV at raw 4095
-    uint32_t batt_mv = (uint32_t)raw * 6200 / 4095;
 
+    // Average 16 samples to reduce ADC noise
+    int32_t sum = 0;
+    for (int i = 0; i < 16; i++) {
+        int raw = 0;
+        adc_oneshot_read(s_adc2, ADC_CHANNEL_0, &raw);
+        sum += raw;
+    }
+    // 100k/100k divider, ADC_ATTEN_DB_12 full scale ≈ 3900 mV at raw 4095
+    uint32_t batt_mv = (uint32_t)(sum / 16) * 7800 / 4095;
+
+    // EMA to damp display jitter (~0.8 s time constant at 50 ms update rate)
+    static int32_t filtered_mv = 0;
+    static bool    initialized  = false;
+    if (!initialized) { filtered_mv = (int32_t)batt_mv; initialized = true; }
+    else               { filtered_mv = (filtered_mv * 15 + (int32_t)batt_mv) / 16; }
+
+    uint32_t fmv = (uint32_t)filtered_mv;
     static const uint32_t v[]   = {3000, 3400, 3600, 3700, 3800, 3900, 4000, 4100, 4200};
     static const int      soc[] = {   0,   10,   20,   35,   50,   65,   80,   90,  100};
 
-    if (batt_mv <= v[0]) return 0;
-    if (batt_mv >= v[8]) return 100;
+    if (fmv <= v[0]) return 0;
+    if (fmv >= v[8]) return 100;
     for (int i = 0; i < 8; i++) {
-        if (batt_mv < v[i + 1])
-            return soc[i] + (int)((batt_mv - v[i]) * (soc[i + 1] - soc[i]) / (v[i + 1] - v[i]));
+        if (fmv < v[i + 1])
+            return soc[i] + (int)((fmv - v[i]) * (soc[i + 1] - soc[i]) / (v[i + 1] - v[i]));
     }
     return 100;
 }
@@ -539,7 +551,6 @@ static void handle_encoder() {
         lastEncSwDb = now;
 
         if (appMode == MODE_NORMAL) {
-            menuItem      = 0;
             appMode       = MODE_MENU_NAV;
             menuEnteredAt = now;
         } else if (appMode == MODE_MENU_NAV) {
