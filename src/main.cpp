@@ -522,9 +522,9 @@ static void fill_octet(uint8_t *slots, int val) {
     slots[0] = val ? MAX7219Display::digit(val % 10) : MAX7219Display::SEG_BLANK;
 }
 
-static void show_ip_splash() {
+static void show_ip_splash(const char *ip) {
     int o[4];
-    if (sscanf(ethIPStr, "%d.%d.%d.%d", &o[0], &o[1], &o[2], &o[3]) != 4) return;
+    if (sscanf(ip, "%d.%d.%d.%d", &o[0], &o[1], &o[2], &o[3]) != 4) return;
     for (int pair = 0; pair < 2; pair++) {
         uint8_t segs[8] = {};
         fill_octet(segs + 1, o[pair * 2]);
@@ -538,6 +538,8 @@ static void show_ip_splash() {
 
 static bool           s_wifi_joined      = false;
 static bool           g_sta_failed       = false;
+static bool           g_show_ap_splash   = false;
+static char           g_wifi_ip_str[16]  = {};
 static uint32_t       s_wifi_start_ms    = 0;
 static bool           g_wifi_initialized = false;
 static esp_netif_t   *s_ap_netif         = nullptr;
@@ -734,7 +736,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         s_wifi_joined = true;
         g_wifi_got_ip = true;
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
-        printf("WiFi IP: " IPSTR "\n", IP2STR(&e->ip_info.ip));
+        esp_ip4addr_ntoa(&e->ip_info.ip, g_wifi_ip_str, sizeof(g_wifi_ip_str));
+        printf("WiFi IP: %s\n", g_wifi_ip_str);
         http_server_start();
     }
 }
@@ -772,6 +775,7 @@ static void wifi_start_ap() {
     g_wifi_as_ap    = true;
     s_wifi_joined   = false;
     s_wifi_start_ms = now_ms();
+    g_show_ap_splash = true;
     printf("WiFi AP: tapbox (open) — config at 192.168.4.1\n");
 }
 
@@ -1198,7 +1202,7 @@ extern "C" void app_main(void) {
 
     if (ethConnected) {
         printf("IP: %s\n", ethIPStr);
-        show_ip_splash();
+        show_ip_splash(ethIPStr);
         if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
     } else {
         printf("No Ethernet — running standalone\n");
@@ -1237,8 +1241,13 @@ extern "C" void app_main(void) {
             printf("Ethernet lost — starting WiFi\n");
             wifi_init();
         }
+        if (g_show_ap_splash) {
+            g_show_ap_splash = false;
+            show_ip_splash("192.168.4.1");
+        }
         if (g_wifi_got_ip) {
             g_wifi_got_ip = false;
+            show_ip_splash(g_wifi_ip_str);
             abl_link_enable(s_link, false);
             vTaskDelay(pdMS_TO_TICKS(100));
             abl_link_enable(s_link, true);
