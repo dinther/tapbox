@@ -12,6 +12,8 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
+#include "esp_https_ota.h"
+#include "esp_crt_bundle.h"
 #include "abl_link.h"
 #include "tap_tempo.h"
 #include "ethernet_config.h"
@@ -33,6 +35,7 @@
 #define DISPLAY_MS      50
 #define MENU_TIMEOUT_MS 6000
 #define OSC_PORT        8000
+#define OTA_URL         "https://dinther.github.io/tapbox/firmware.bin"
 
 // ── 7-segment characters (D6=A … D0=G) ────────────────────────────────────────
 static constexpr uint8_t CH_a = 0x7D;
@@ -108,8 +111,8 @@ static uint32_t menuEnteredAt = 0;
 enum MenuIdx {
     MENU_SIG = 0, MENU_ACC, MENU_BRIT,
     MENU_NET, MENU_IP, MENU_SN, MENU_GT,
-    MENU_RESET, MENU_VER, MENU_BAT, MENU_DONE,
-    MENU_COUNT  // 11
+    MENU_RESET, MENU_UPD, MENU_VER, MENU_BAT, MENU_DONE,
+    MENU_COUNT  // 12
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -241,8 +244,9 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
     { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
     { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
-    { CH_r, CH_S, CH_e, CH_t                      },  // rSet
-    { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK },  // vEr  (CH_u renders as 'v')
+    { CH_r, CH_S, CH_e, CH_t                                          },  // rSet
+    { CH_u, CH_P, CH_d | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // UPd.
+    { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK                  },  // vEr  (CH_u renders as 'v')
     { CH_b, CH_A, CH_t, MAX7219Display::SEG_BLANK },  // bAt
     { CH_d, CH_o, CH_n, CH_e                      },  // done
 };
@@ -315,7 +319,7 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
         case MENU_IP: case MENU_SN: case MENU_GT:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
             break;
-        case MENU_RESET:
+        case MENU_RESET: case MENU_UPD:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
             break;
         case MENU_VER:
@@ -395,6 +399,62 @@ static void update_display() {
     if (!blank) render_menu_value(segs, menuItem, val);
 
     display.setSegments(segs);
+}
+
+// ── OTA update ────────────────────────────────────────────────────────────────
+
+static void perform_ota() {
+    uint8_t segs[8] = {};
+    memcpy(segs, kMenuLabels[MENU_UPD], 4);
+    segs[4] = segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
+    display.setSegments(segs);
+
+    auto show_err = [&]() {
+        memcpy(segs, kMenuLabels[MENU_UPD], 4);
+        segs[4] = segs[5] = MAX7219Display::SEG_BLANK;
+        segs[6] = CH_e; segs[7] = CH_r;
+        display.setSegments(segs);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        appMode       = MODE_MENU_NAV;
+        menuEnteredAt = now_ms();
+    };
+
+    if (!ethConnected) { show_err(); return; }
+
+    esp_http_client_config_t http_cfg = {};
+    http_cfg.url               = OTA_URL;
+    http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    http_cfg.timeout_ms        = 30000;
+    http_cfg.keep_alive_enable = true;
+
+    esp_https_ota_config_t ota_cfg = {};
+    ota_cfg.http_config = &http_cfg;
+
+    esp_https_ota_handle_t h = nullptr;
+    if (esp_https_ota_begin(&ota_cfg, &h) != ESP_OK) { show_err(); return; }
+
+    int total = esp_https_ota_get_image_size(h);
+    esp_err_t err;
+    while ((err = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+        if (total > 0) {
+            int pct = esp_https_ota_get_image_len_read(h) * 100 / total;
+            memcpy(segs, kMenuLabels[MENU_UPD], 4);
+            render_int3(segs, pct);
+            display.setSegments(segs);
+        }
+    }
+
+    if (err == ESP_OK && esp_https_ota_is_complete_data_received(h) &&
+        esp_https_ota_finish(h) == ESP_OK) {
+        memcpy(segs, kMenuLabels[MENU_UPD], 4);
+        segs[4] = CH_d; segs[5] = CH_o; segs[6] = CH_n; segs[7] = CH_e;
+        display.setSegments(segs);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        esp_restart();
+    } else {
+        esp_https_ota_abort(h);
+        show_err();
+    }
 }
 
 // ── Boot reboot display ────────────────────────────────────────────────────────
@@ -558,6 +618,8 @@ static void handle_encoder() {
                 exit_menu();
             } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
                 menuEnteredAt = now;  // read-only — reset timeout only
+            } else if (menuItem == MENU_UPD) {
+                perform_ota();
             } else if (menuItem == MENU_RESET) {
                 appMode       = MODE_MENU_CONFIRM;
                 menuEnteredAt = now;
