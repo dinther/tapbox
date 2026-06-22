@@ -839,7 +839,7 @@ static void wifi_start_sta() {
 static void wifi_stop() {
     if (s_httpd) { httpd_stop(s_httpd); s_httpd = nullptr; }
     if (g_wifi_enabled) { esp_wifi_stop(); g_wifi_enabled = false; }
-    printf("WiFi stopped (60 s timeout)\n");
+    printf("WiFi stopped\n");
 }
 
 static void wifi_init() {
@@ -1237,6 +1237,7 @@ extern "C" void app_main(void) {
 
     if (ethConnected) {
         printf("IP: %s\n", ethIPStr);
+        http_server_start();
         show_scroll_splash("Eth", ethIPStr);
         if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
     } else {
@@ -1300,6 +1301,7 @@ extern "C" void app_main(void) {
             vTaskDelay(pdMS_TO_TICKS(100));
             abl_link_enable(s_link, true);
             linkEnabled = true;
+            http_server_start();
             show_scroll_splash("Eth", ethIPStr);
             printf("Link re-enabled on Ethernet interface\n");
             if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
