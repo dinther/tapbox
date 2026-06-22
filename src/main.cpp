@@ -14,6 +14,8 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_https_ota.h"
 #include "esp_crt_bundle.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "abl_link.h"
 #include "tap_tempo.h"
 #include "ethernet_config.h"
@@ -61,7 +63,7 @@ static constexpr uint8_t CH_u = 0x1C;
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 1
+#define FW_MINOR 2
 #define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
@@ -121,6 +123,8 @@ static int menuSubItem = 0;  // active octet (0–3) when in sub-menu
 // ── Time helpers ───────────────────────────────────────────────────────────────
 static inline uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
 static inline uint64_t now_us() { return (uint64_t)esp_timer_get_time(); }
+
+static void show_boot_reboot();  // forward declaration
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 
@@ -189,6 +193,17 @@ static void factory_reset() {
     g_gt[0] = 192; g_gt[1] = 168; g_gt[2] =   1; g_gt[3] =   1;
     nvs_save_settings();
     apply_settings();
+    // Erase OTA data so the bootloader returns to the factory partition.
+    // Guard: only if a factory partition exists — devices that were upgraded via OTA
+    // (never reprogrammed) have no factory partition and must not be left bootless.
+    const esp_partition_t *factory_part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    if (factory_part) {
+        const esp_partition_t *otadata = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, NULL);
+        if (otadata) esp_partition_erase_range(otadata, 0, otadata->size);
+    }
+    show_boot_reboot();
 }
 
 // ── Menu value helpers ─────────────────────────────────────────────────────────
@@ -657,8 +672,7 @@ static void handle_encoder() {
             appMode       = MODE_SUBMENU_NAV;
             menuEnteredAt = now;
         } else if (appMode == MODE_MENU_CONFIRM) {
-            factory_reset();
-            appMode = MODE_NORMAL;
+            factory_reset();  // does not return — reboots
         }
     }
     lastEncSw = sw;
@@ -832,6 +846,10 @@ extern "C" void app_main(void) {
     abl_link_set_tempo(s_session, 120.0, now_us());
     abl_link_commit_app_session_state(s_link, s_session);
     printf("Link live at 120.0 BPM\n");
+
+    // Confirm to the bootloader that this firmware booted successfully.
+    // If the device was just OTA-updated, this prevents rollback on next boot.
+    esp_ota_mark_app_valid_cancel_rollback();
 
     xTaskCreate(osc_task, "osc", 4096, nullptr, 5, nullptr);
     printf("OSC listening on port %d\n", OSC_PORT);
