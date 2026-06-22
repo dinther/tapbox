@@ -527,15 +527,44 @@ static void fill_octet(uint8_t *slots, int val) {
     slots[0] = val ? MAX7219Display::digit(val % 10) : MAX7219Display::SEG_BLANK;
 }
 
-static void show_ip_splash(const char *ip) {
-    int o[4];
-    if (sscanf(ip, "%d.%d.%d.%d", &o[0], &o[1], &o[2], &o[3]) != 4) return;
-    for (int pair = 0; pair < 2; pair++) {
+static uint8_t char_to_seg(char c) {
+    if (c >= '0' && c <= '9') return MAX7219Display::digit(c - '0');
+    switch (c) {
+        case 'A': case 'a': return CH_A;
+        case 'D': case 'd': return CH_d;
+        case 'E': case 'e': return CH_e;
+        case 'H': case 'h': return CH_h;
+        case 'I': case 'i': return CH_I;
+        case 'P': case 'p': return CH_P;
+        case 'S': case 's': return CH_S;
+        case 'T': case 't': return CH_t;
+        default:            return MAX7219Display::SEG_BLANK;
+    }
+}
+
+// Scrolls "label ip" right-to-left across the 8-digit display, 500 ms per step.
+// Dots in ip are merged as DP onto the preceding digit.
+static void show_scroll_splash(const char *label, const char *ip) {
+    uint8_t buf[48] = {};
+    int len = 0;
+    for (int i = 0; label[i] && len < 46; i++)
+        buf[len++] = char_to_seg(label[i]);
+    buf[len++] = MAX7219Display::SEG_BLANK;
+    for (int i = 0; ip[i] && len < 47; i++) {
+        if (ip[i] == '.') {
+            if (len > 0) buf[len - 1] |= MAX7219Display::SEG_DP;
+        } else {
+            buf[len++] = char_to_seg(ip[i]);
+        }
+    }
+    for (int offset = -7; offset <= len; offset++) {
         uint8_t segs[8] = {};
-        fill_octet(segs + 1, o[pair * 2]);
-        fill_octet(segs + 5, o[pair * 2 + 1]);
+        for (int d = 0; d < 8; d++) {
+            int idx = offset + d;
+            segs[d] = (idx >= 0 && idx < len) ? buf[idx] : MAX7219Display::SEG_BLANK;
+        }
         display.setSegments(segs);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
@@ -1208,7 +1237,7 @@ extern "C" void app_main(void) {
 
     if (ethConnected) {
         printf("IP: %s\n", ethIPStr);
-        show_ip_splash(ethIPStr);
+        show_scroll_splash("Eth", ethIPStr);
         if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
     } else {
         printf("No Ethernet — running standalone\n");
@@ -1249,11 +1278,11 @@ extern "C" void app_main(void) {
         }
         if (g_show_ap_splash) {
             g_show_ap_splash = false;
-            show_ip_splash("192.168.4.1");
+            show_scroll_splash("AP", "192.168.4.1");
         }
         if (g_wifi_got_ip) {
             g_wifi_got_ip = false;
-            show_ip_splash(g_wifi_ip_str);
+            show_scroll_splash("SSID", g_wifi_ip_str);
             abl_link_enable(s_link, false);
             vTaskDelay(pdMS_TO_TICKS(100));
             abl_link_enable(s_link, true);
@@ -1271,6 +1300,7 @@ extern "C" void app_main(void) {
             vTaskDelay(pdMS_TO_TICKS(100));
             abl_link_enable(s_link, true);
             linkEnabled = true;
+            show_scroll_splash("Eth", ethIPStr);
             printf("Link re-enabled on Ethernet interface\n");
             if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
         }
