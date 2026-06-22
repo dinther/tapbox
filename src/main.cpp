@@ -21,6 +21,8 @@
 #include "ethernet_config.h"
 #include "max7219.h"
 #include "lwip/sockets.h"
+#include "esp_wifi.h"
+#include "esp_http_server.h"
 
 // ── Pin assignments ────────────────────────────────────────────────────────────
 #define PIN_TAP_BUTTON  GPIO_NUM_12
@@ -60,6 +62,7 @@ static constexpr uint8_t CH_r = 0x05;
 static constexpr uint8_t CH_S = 0x5B;
 static constexpr uint8_t CH_t = 0x0F;
 static constexpr uint8_t CH_u = 0x1C;
+static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
@@ -82,6 +85,8 @@ static int g_net     = 0;              // 0=DHCP, 1=static
 static int g_ip[4]   = {192, 168,   1, 200};
 static int g_sn[4]   = {255, 255, 255,   0};
 static int g_gt[4]   = {192, 168,   1,   1};
+static char g_wifi_ssid[64] = {};
+static char g_wifi_pass[64] = {};
 
 // ── Runtime values derived from settings ──────────────────────────────────────
 static double g_bpmStep = 0.1;
@@ -108,6 +113,9 @@ static uint32_t lastSelectDb    = 0;
 static uint32_t s_selPressedAt  = 0;
 static bool     s_selLongFired  = false;
 
+static bool     g_wifi_enabled  = false;
+static bool     g_wifi_as_ap    = false;
+
 // ── Menu state ─────────────────────────────────────────────────────────────────
 enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
                MODE_SUBMENU_NAV, MODE_SUBMENU_EDIT };
@@ -117,8 +125,8 @@ static uint32_t menuEnteredAt = 0;
 enum MenuIdx {
     MENU_SIG = 0, MENU_ACC, MENU_BRIT,
     MENU_NET, MENU_IP, MENU_SN, MENU_GT,
-    MENU_RESET, MENU_UPD, MENU_VER, MENU_BAT, MENU_DONE,
-    MENU_COUNT  // 12
+    MENU_RESET, MENU_UPD, MENU_VER, MENU_BAT, MENU_WIFI, MENU_DONE,
+    MENU_COUNT  // 13
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -129,6 +137,7 @@ static inline uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000U
 static inline uint64_t now_us() { return (uint64_t)esp_timer_get_time(); }
 
 static void show_boot_reboot();  // forward declaration
+static void nvs_save_wifi();     // forward declaration
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 
@@ -195,7 +204,10 @@ static void factory_reset() {
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
     g_gt[0] = 192; g_gt[1] = 168; g_gt[2] =   1; g_gt[3] =   1;
+    g_wifi_ssid[0] = '\0';
+    g_wifi_pass[0] = '\0';
     nvs_save_settings();
+    nvs_save_wifi();
     apply_settings();
     // Erase OTA data so the bootloader returns to the factory partition.
     // Guard: only if a factory partition exists — devices that were upgraded via OTA
@@ -267,6 +279,7 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_u, CH_P, CH_d | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // UPd.
     { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK                  },  // vEr  (CH_u renders as 'v')
     { CH_b, CH_A, CH_t, MAX7219Display::SEG_BLANK },  // bAt
+    { CH_A, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK },  // AP (WiFi config)
     { CH_d, CH_o, CH_n, CH_e                      },  // done
 };
 
@@ -348,6 +361,15 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             break;
         case MENU_BAT:
             render_int3(segs, read_battery_pct());
+            break;
+        case MENU_WIFI:
+            if (!g_wifi_enabled) {
+                segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
+            } else if (g_wifi_as_ap) {
+                segs[5] = CH_A; segs[6] = CH_P; segs[7] = MAX7219Display::SEG_BLANK;
+            } else {
+                segs[5] = MAX7219Display::SEG_BLANK; segs[6] = CH_o; segs[7] = CH_n;
+            }
             break;
         case MENU_DONE:
             break;
@@ -509,6 +531,273 @@ static void show_ip_splash() {
     }
 }
 
+// ── WiFi & HTTP config server ──────────────────────────────────────────────────
+
+static bool           s_wifi_joined      = false;
+static uint32_t       s_wifi_start_ms    = 0;
+static bool           g_wifi_initialized = false;
+static esp_netif_t   *s_ap_netif         = nullptr;
+static esp_netif_t   *s_sta_netif        = nullptr;
+static httpd_handle_t s_httpd            = nullptr;
+
+static void nvs_save_wifi() {
+    nvs_handle_t h;
+    if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "wifi_ssid", g_wifi_ssid);
+    nvs_set_str(h, "wifi_pass", g_wifi_pass);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void url_decode(char *s) {
+    char *d = s;
+    while (*s) {
+        if (*s == '+') { *d++ = ' '; s++; }
+        else if (*s == '%' && s[1] && s[2]) {
+            unsigned v = 0; sscanf(s + 1, "%2x", &v);
+            *d++ = (char)v; s += 3;
+        } else { *d++ = *s++; }
+    }
+    *d = '\0';
+}
+
+static bool form_field(const char *body, const char *key, char *out, int out_size) {
+    char search[32]; snprintf(search, sizeof(search), "%s=", key);
+    const char *p = strstr(body, search);
+    if (!p) return false;
+    p += strlen(search);
+    const char *end = strchr(p, '&');
+    int len = end ? (int)(end - p) : (int)strlen(p);
+    if (len >= out_size) len = out_size - 1;
+    memcpy(out, p, len); out[len] = '\0';
+    url_decode(out);
+    return true;
+}
+
+static esp_err_t http_get_root(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html");
+    char tmp[128];
+
+    httpd_resp_sendstr_chunk(req,
+        "<!DOCTYPE html><html><head>"
+        "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+        "<title>tapbox</title><style>"
+        "*{box-sizing:border-box}"
+        "body{font:15px sans-serif;max-width:400px;margin:20px auto;padding:0 15px}"
+        "h3{margin:14px 0 4px}"
+        "label{display:block;margin:6px 0 1px;font-size:13px;color:#555}"
+        "input,select{width:100%;padding:7px;border:1px solid #ccc;border-radius:3px}"
+        "button{width:100%;padding:11px;margin-top:10px;background:#07c;color:#fff;"
+        "border:none;border-radius:3px;font-size:15px;cursor:pointer}"
+        "#sb{display:none}"
+        "</style></head><body><h2>tapbox</h2>"
+        "<form method=post action=/save>"
+        "<h3>WiFi</h3>"
+        "<label>Network name (SSID)</label>");
+    snprintf(tmp, sizeof(tmp), "<input name=ssid value=\"%s\">", g_wifi_ssid);
+    httpd_resp_sendstr_chunk(req, tmp);
+    httpd_resp_sendstr_chunk(req,
+        "<label>Password</label>"
+        "<input name=pass type=password placeholder=\"(leave blank to keep current)\">"
+        "<h3>Ethernet</h3><label>Mode</label>"
+        "<select name=net"
+        " onchange=\"document.getElementById('sb').style.display="
+        "this.value==='1'?'block':'none'\">");
+    snprintf(tmp, sizeof(tmp),
+        "<option value=0%s>DHCP</option><option value=1%s>Static</option></select>",
+        g_net == 0 ? " selected" : "", g_net == 1 ? " selected" : "");
+    httpd_resp_sendstr_chunk(req, tmp);
+    snprintf(tmp, sizeof(tmp),
+        "<div id=sb><label>IP</label><input name=ip value=\"%d.%d.%d.%d\">",
+        g_ip[0], g_ip[1], g_ip[2], g_ip[3]);
+    httpd_resp_sendstr_chunk(req, tmp);
+    snprintf(tmp, sizeof(tmp),
+        "<label>Subnet</label><input name=sn value=\"%d.%d.%d.%d\">",
+        g_sn[0], g_sn[1], g_sn[2], g_sn[3]);
+    httpd_resp_sendstr_chunk(req, tmp);
+    snprintf(tmp, sizeof(tmp),
+        "<label>Gateway</label><input name=gw value=\"%d.%d.%d.%d\"></div>",
+        g_gt[0], g_gt[1], g_gt[2], g_gt[3]);
+    httpd_resp_sendstr_chunk(req, tmp);
+
+    httpd_resp_sendstr_chunk(req,
+        "<h3>Display</h3><label>Time signature</label><select name=sig>");
+    static const char *sigs[] = {"2","3","4","5","6","7"};
+    for (int i = 0; i < 6; i++) {
+        snprintf(tmp, sizeof(tmp), "<option value=%d%s>%s</option>",
+            i, i == g_sigIdx ? " selected" : "", sigs[i]);
+        httpd_resp_sendstr_chunk(req, tmp);
+    }
+    httpd_resp_sendstr_chunk(req, "</select>");
+    snprintf(tmp, sizeof(tmp),
+        "<label>Brightness (1-15)</label>"
+        "<input name=brit type=number min=1 max=15 value=%d>", g_brit);
+    httpd_resp_sendstr_chunk(req, tmp);
+    httpd_resp_sendstr_chunk(req, "<label>Accuracy</label><select name=acc>");
+    static const char *accs[] = {"Low","Standard","High"};
+    for (int i = 0; i < 3; i++) {
+        snprintf(tmp, sizeof(tmp), "<option value=%d%s>%s</option>",
+            i, i == g_accIdx ? " selected" : "", accs[i]);
+        httpd_resp_sendstr_chunk(req, tmp);
+    }
+    httpd_resp_sendstr_chunk(req,
+        "</select>"
+        "<button>Save &amp; reboot</button></form>"
+        "<script>"
+        "var s=document.querySelector('[name=net]');"
+        "if(s.value==='1')document.getElementById('sb').style.display='block'"
+        "</script></body></html>");
+    httpd_resp_sendstr_chunk(req, nullptr);
+    return ESP_OK;
+}
+
+static esp_err_t http_post_save(httpd_req_t *req) {
+    int total = req->content_len;
+    if (total <= 0 || total > 1024) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request");
+        return ESP_FAIL;
+    }
+    char *body = (char *)malloc(total + 1);
+    if (!body) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+    int received = httpd_req_recv(req, body, total);
+    if (received <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv"); return ESP_FAIL; }
+    body[received] = '\0';
+
+    char tmp[64], ip_str[20];
+    if (form_field(body, "ssid", tmp, sizeof(tmp)) && tmp[0])
+        snprintf(g_wifi_ssid, sizeof(g_wifi_ssid), "%s", tmp);
+    if (form_field(body, "pass", tmp, sizeof(tmp)) && tmp[0])
+        snprintf(g_wifi_pass, sizeof(g_wifi_pass), "%s", tmp);
+    if (form_field(body, "net",  tmp, sizeof(tmp))) g_net = atoi(tmp);
+    if (form_field(body, "ip", ip_str, sizeof(ip_str)))
+        sscanf(ip_str, "%d.%d.%d.%d", &g_ip[0], &g_ip[1], &g_ip[2], &g_ip[3]);
+    if (form_field(body, "sn", ip_str, sizeof(ip_str)))
+        sscanf(ip_str, "%d.%d.%d.%d", &g_sn[0], &g_sn[1], &g_sn[2], &g_sn[3]);
+    if (form_field(body, "gw", ip_str, sizeof(ip_str)))
+        sscanf(ip_str, "%d.%d.%d.%d", &g_gt[0], &g_gt[1], &g_gt[2], &g_gt[3]);
+    if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount) g_sigIdx = v; }
+    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 15)       g_brit   = v; }
+    if (form_field(body, "acc",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kAccCount) g_accIdx = v; }
+    free(body);
+
+    nvs_save_settings();
+    nvs_save_wifi();
+    apply_settings();
+
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_sendstr(req,
+        "<!DOCTYPE html><html><body>"
+        "<h2>Saved. tapbox is rebooting...</h2>"
+        "<p>Reconnect to your WiFi network if needed, "
+        "then visit <a href='http://tapbox.local'>tapbox.local</a></p>"
+        "</body></html>");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
+    return ESP_OK;
+}
+
+static void http_server_start() {
+    if (s_httpd) return;
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    if (httpd_start(&s_httpd, &cfg) != ESP_OK) { s_httpd = nullptr; return; }
+    httpd_uri_t get_h  = { .uri = "/",     .method = HTTP_GET,  .handler = http_get_root,  .user_ctx = nullptr };
+    httpd_uri_t post_h = { .uri = "/save", .method = HTTP_POST, .handler = http_post_save, .user_ctx = nullptr };
+    httpd_register_uri_handler(s_httpd, &get_h);
+    httpd_register_uri_handler(s_httpd, &post_h);
+    printf("HTTP config server started\n");
+}
+
+static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+        s_wifi_joined = true;
+    }
+    if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        s_wifi_joined = true;
+        ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
+        printf("WiFi IP: " IPSTR "\n", IP2STR(&e->ip_info.ip));
+        http_server_start();
+    }
+}
+
+static void wifi_common_init() {
+    if (g_wifi_initialized) return;
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, nullptr);
+    esp_event_handler_register(IP_EVENT,   IP_EVENT_STA_GOT_IP, wifi_event_handler, nullptr);
+    wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&init_cfg);
+    g_wifi_initialized = true;
+}
+
+static void wifi_start_ap() {
+    wifi_common_init();
+    if (g_wifi_enabled) esp_wifi_stop();
+    if (!s_ap_netif) s_ap_netif = esp_netif_create_default_wifi_ap();
+
+    wifi_config_t ap_cfg = {};
+    const char *ap_ssid = "tapbox";
+    memcpy(ap_cfg.ap.ssid, ap_ssid, strlen(ap_ssid));
+    ap_cfg.ap.ssid_len       = (uint8_t)strlen(ap_ssid);
+    ap_cfg.ap.channel        = 1;
+    ap_cfg.ap.authmode       = WIFI_AUTH_OPEN;
+    ap_cfg.ap.max_connection = 4;
+
+    esp_wifi_set_mode(WIFI_MODE_AP);
+    esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+    esp_wifi_start();
+
+    http_server_start();
+
+    g_wifi_enabled  = true;
+    g_wifi_as_ap    = true;
+    s_wifi_joined   = false;
+    s_wifi_start_ms = now_ms();
+    printf("WiFi AP: tapbox (open) — config at 192.168.4.1\n");
+}
+
+static void wifi_start_sta() {
+    wifi_common_init();
+    if (g_wifi_enabled) esp_wifi_stop();
+    if (!s_sta_netif) s_sta_netif = esp_netif_create_default_wifi_sta();
+
+    wifi_config_t sta_cfg = {};
+    strncpy((char *)sta_cfg.sta.ssid,     g_wifi_ssid, sizeof(sta_cfg.sta.ssid));
+    strncpy((char *)sta_cfg.sta.password, g_wifi_pass, sizeof(sta_cfg.sta.password));
+
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+    esp_wifi_start();
+    esp_wifi_connect();
+
+    g_wifi_enabled  = true;
+    g_wifi_as_ap    = false;
+    s_wifi_joined   = false;
+    s_wifi_start_ms = now_ms();
+    printf("WiFi STA: connecting to %s\n", g_wifi_ssid);
+}
+
+static void wifi_stop() {
+    if (s_httpd) { httpd_stop(s_httpd); s_httpd = nullptr; }
+    if (g_wifi_enabled) { esp_wifi_stop(); g_wifi_enabled = false; }
+    printf("WiFi stopped (60 s timeout)\n");
+}
+
+static void wifi_init() {
+    nvs_handle_t h;
+    if (nvs_open("settings", NVS_READONLY, &h) == ESP_OK) {
+        size_t len;
+        len = sizeof(g_wifi_ssid); nvs_get_str(h, "wifi_ssid", g_wifi_ssid, &len);
+        len = sizeof(g_wifi_pass); nvs_get_str(h, "wifi_pass", g_wifi_pass, &len);
+        nvs_close(h);
+    }
+    if (g_wifi_ssid[0] == '\0') wifi_start_ap();
+    else                        wifi_start_sta();
+}
+
+static void check_wifi_timeout() {
+    if (!g_wifi_enabled || s_wifi_joined) return;
+    if (now_ms() - s_wifi_start_ms >= 60000) wifi_stop();
+}
+
 // ── Link helpers ───────────────────────────────────────────────────────────────
 
 static void set_link_tempo(double bpm) {
@@ -656,6 +945,10 @@ static void on_select_short_press() {
                 exit_menu();
             } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
                 menuEnteredAt = now;
+            } else if (menuItem == MENU_WIFI) {
+                exit_menu();
+                if (g_wifi_enabled) wifi_stop();
+                wifi_start_ap();
             } else if (menuItem == MENU_UPD) {
                 perform_ota();
             } else if (menuItem == MENU_RESET) {
@@ -880,6 +1173,8 @@ extern "C" void app_main(void) {
     }
     printf("\n");
 
+    wifi_init();
+
     if (ethConnected) {
         printf("IP: %s\n", ethIPStr);
         show_ip_splash();
@@ -909,6 +1204,7 @@ extern "C" void app_main(void) {
         handle_button();
         handle_select();
         check_menu_timeout();
+        check_wifi_timeout();
         update_display();
         print_status();
         vTaskDelay(pdMS_TO_TICKS(1));
