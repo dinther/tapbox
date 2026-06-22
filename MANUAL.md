@@ -71,8 +71,7 @@ tapbox can connect to your WiFi network and run Ableton Link over it. This is us
 3. Connect your phone or laptop to the **tapbox** network.
 4. Open **http://192.168.4.1** in your browser.
 5. Enter your WiFi network name (SSID) and password. The SSID field is case-sensitive — copy it exactly from your phone's WiFi list.
-6. Adjust any other settings if needed, then tap **Save**.
-7. tapbox saves the credentials and reboots. It connects to your network as a WiFi client and scrolls `SSID` followed by the assigned IP address.
+6. Tap **Save Network — tapbox will reboot**. The device saves the credentials and reboots, then connects to your network as a WiFi client and scrolls `SSID` followed by the assigned IP address.
 
 #### Changing WiFi credentials later
 
@@ -88,6 +87,14 @@ tapbox switches interfaces automatically without a reboot:
 If WiFi credentials fail to connect, tapbox falls back to AP mode immediately so you can reconfigure without rebooting.
 
 By default tapbox uses DHCP for the Ethernet connection. If you need a fixed address, configure a static IP in the `Lan.` / `IP` / `Sub.` / `Hub.` menu items.
+
+### Web Configuration Page
+
+The config page is available at the device IP address on port 80 from any browser, over Ethernet or WiFi. It is split into two independent sections:
+
+**Network** (WiFi SSID/password, Ethernet mode, static IP/subnet/gateway) — tap **Save Network — tapbox will reboot** to apply. The orange button is a reminder that a reboot follows.
+
+**Display** (time signature, brightness, accuracy) — tap **Save Display Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
 
 ---
 
@@ -113,21 +120,13 @@ The beat counter on the display counts from 1 up to this number, then loops back
 
 ---
 
-### Acc. — Accuracy
+### nud — Nudge Size
 
-**What it does:** sets the control sensitivity for both the tap auto-increment step (when holding the tap button in the menu) and OSC nudge commands.
+**What it does:** sets the OSC nudge amount — how far the beat phase shifts in response to a `/nudge_up` or `/nudge_down` command.
 
-| Setting | Value step | OSC nudge |
-|---------|-----------|-----------|
-| **Lo** | 1.0 BPM | 50 ms |
-| **Std** | 0.5 BPM | 20 ms |
-| **Hi** | 0.1 BPM | 5 ms |
+Three options: **50 ms**, **20 ms**, **5 ms**.
 
-**Lo** is best for live performance where you need to shift tempo decisively between sections.
-
-**Std** is the everyday setting. Half a BPM per step gives enough resolution without overshooting.
-
-**Hi** is for studio work where you are hunting for an exact tempo or need surgical phase correction.
+50 ms is best for live performance where you need to push or pull the phase decisively. 5 ms is for studio work where you need surgical phase correction. 20 ms is a good everyday value.
 
 *Default: Std*
 

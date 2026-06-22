@@ -69,7 +69,7 @@ Value flashes at 4 Hz in edit mode.
 | Label | Setting | Values |
 |-------|---------|--------|
 | `Beat` | Time signature | 2, 3, 4, 5, 6, 7 |
-| `Acc.` | Accuracy preset | `Lo` (1.0 BPM / 50 ms) · `Std` (0.5 BPM / 20 ms) · `Hi` (0.1 BPM / 5 ms) |
+| `nud ` | OSC nudge size | 50 ms · 20 ms · 5 ms |
 | `Led ` | Display brightness | 1 – 15 (live preview) |
 | `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) |
 | `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
@@ -80,7 +80,7 @@ Value flashes at 4 Hz in edit mode.
 | `bAt ` | Battery level | read-only; shows 0–100 (requires IO36 voltage divider) |
 | `done` | Exit menu | returns to normal mode |
 
-`Acc.` controls both the tap auto-increment step and the OSC nudge amount.  
+`nud` controls the OSC nudge amount.  
 `IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
 Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
 
@@ -97,12 +97,21 @@ tapbox prefers Ethernet. WiFi is used automatically when no Ethernet cable is pr
 1. Boot tapbox without an Ethernet cable.
 2. Connect your phone or laptop to the **tapbox** open WiFi network.
 3. Open **http://192.168.4.1** in a browser.
-4. Enter your WiFi SSID and password, adjust any other settings, and tap **Save**.
+4. Enter your WiFi SSID and password and tap **Save Network — tapbox will reboot**.
 5. tapbox reboots and connects to your network as a client.
 
 The ESP32 radio supports **2.4 GHz only**. If your router broadcasts separate 2.4 GHz and 5 GHz SSIDs, use the 2.4 GHz one.
 
 If WiFi credentials are stored but the connection fails, tapbox falls back to AP mode automatically so you can reconfigure without a factory reset.
+
+## Web Configuration
+
+The config page at `http://<tapbox-ip>` is accessible from any browser over Ethernet or WiFi. It has two sections:
+
+| Section | Fields | Button | Effect |
+|---------|--------|--------|--------|
+| Network | WiFi SSID/password, Ethernet mode, static IP/subnet/gateway | Save Network — tapbox will reboot | Saves and reboots |
+| Display | Time signature, brightness, accuracy | Save Display Settings | Saves and applies live — no reboot |
 
 ## OSC Interface
 

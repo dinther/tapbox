@@ -66,20 +66,19 @@ static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 3
+#define FW_MINOR 4
 #define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
 static const int    kSigCount     = 6;
 
-static const double kAccStep[]    = { 1.0, 0.5, 0.1 };   // Lo, Std, Hi
-static const int    kAccNudgeMs[] = { 50,  20,  5   };   // Lo, Std, Hi
-static const int    kAccCount     = 3;
+static const int    kNudgeMs[]    = { 50, 20, 5 };
+static const int    kNudgeCount   = 3;
 
 // ── Persistent settings ────────────────────────────────────────────────────────
-static int g_sigIdx  = 2;              // kSignatures[2] = 4/4
-static int g_accIdx  = 1;              // kAccStep[1]    = Std
+static int g_sigIdx   = 2;             // kSignatures[2] = 4/4
+static int g_nudgeIdx = 1;             // kNudgeMs[1] = 20 ms
 static int g_brit    = 7;              // brightness 1–15
 static int g_net     = 0;              // 0=DHCP, 1=static
 static int g_ip[4]   = {192, 168,   1, 200};
@@ -89,7 +88,6 @@ static char g_wifi_ssid[64] = {};
 static char g_wifi_pass[64] = {};
 
 // ── Runtime values derived from settings ──────────────────────────────────────
-static double g_bpmStep = 0.1;
 static int    g_nudgeUs = 20000;
 
 // ── Core globals ───────────────────────────────────────────────────────────────
@@ -118,6 +116,12 @@ static bool     g_wifi_as_ap    = false;
 static bool     g_wifi_got_ip   = false;
 static bool     g_eth_got_ip    = false;  // Ethernet came back after being down
 static bool     g_eth_lost      = false;  // Ethernet link dropped
+
+// Non-blocking AP scroll state — driven from the main loop display section.
+static uint8_t  s_ap_buf[32]   = {};
+static int      s_ap_len       = 0;
+static int      s_ap_offset    = -7;
+static uint32_t s_ap_step_ms   = 0;
 
 // ── Menu state ─────────────────────────────────────────────────────────────────
 enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
@@ -160,8 +164,7 @@ static void eth_connected_cb(void *, esp_event_base_t, int32_t, void *) {
 
 static void apply_settings() {
     linkQuantum = kSignatures[g_sigIdx];
-    g_bpmStep   = kAccStep[g_accIdx];
-    g_nudgeUs   = kAccNudgeMs[g_accIdx] * 1000;
+    g_nudgeUs   = kNudgeMs[g_nudgeIdx] * 1000;
     display.setIntensity(g_brit);
 }
 
@@ -173,7 +176,7 @@ static void nvs_load_settings() {
     }
     int32_t v;
     if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)  g_sigIdx = (int)v;
-    if (nvs_get_i32(h, "acc",  &v) == ESP_OK && v >= 0 && v < kAccCount)  g_accIdx = (int)v;
+    if (nvs_get_i32(h, "nud",  &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgeIdx = (int)v;
     if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 1 && v <= 15)        g_brit   = (int)v;
     if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net     = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]   = (int)v;
@@ -196,7 +199,7 @@ static void nvs_save_settings() {
     nvs_handle_t h;
     if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_i32(h, "sig",  (int32_t)g_sigIdx);
-    nvs_set_i32(h, "acc",  (int32_t)g_accIdx);
+    nvs_set_i32(h, "nud",  (int32_t)g_nudgeIdx);
     nvs_set_i32(h, "brit", (int32_t)g_brit);
     nvs_set_i32(h, "net",  (int32_t)g_net);
     nvs_set_i32(h, "ip0",  (int32_t)g_ip[0]);
@@ -216,7 +219,7 @@ static void nvs_save_settings() {
 }
 
 static void factory_reset() {
-    g_sigIdx = 2; g_accIdx = 1; g_brit = 7;
+    g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 7;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
@@ -249,7 +252,7 @@ static bool menu_item_visible(int item) {
 static int menu_get_val(int item) {
     switch (item) {
         case MENU_SIG:  return g_sigIdx;
-        case MENU_ACC:  return g_accIdx;
+        case MENU_ACC:  return g_nudgeIdx;
         case MENU_BRIT: return g_brit;
         case MENU_NET:  return g_net;
         default: return 0;
@@ -261,7 +264,7 @@ static int menu_val_min(int item) { return (item == MENU_BRIT) ? 1 : 0; }
 static int menu_val_max(int item) {
     switch (item) {
         case MENU_SIG:  return kSigCount - 1;
-        case MENU_ACC:  return kAccCount - 1;
+        case MENU_ACC:  return kNudgeCount - 1;
         case MENU_BRIT: return 15;
         case MENU_NET:  return 1;
         default: return 0;
@@ -271,7 +274,7 @@ static int menu_val_max(int item) {
 static void menu_commit(int item, int val) {
     switch (item) {
         case MENU_SIG:  g_sigIdx = val; break;
-        case MENU_ACC:  g_accIdx = val; break;
+        case MENU_ACC:  g_nudgeIdx = val; break;
         case MENU_BRIT: g_brit   = val; break;
         case MENU_NET:  g_net    = val; break;
     }
@@ -286,7 +289,7 @@ static int *submenu_array() {
 // Digit segment bytes for use in static label arrays: 0=0x7E 1=0x30 2=0x6D 3=0x79 4=0x33
 static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_B, CH_e, CH_a, CH_t                                       },  // Beat
-    { CH_A, CH_c, CH_c | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Acc.
+    { MAX7219Display::SEG_BLANK, CH_n, CH_u, CH_d },  // nud
     { CH_L, CH_e, CH_d, MAX7219Display::SEG_BLANK                  },  // Led
     { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
     { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
@@ -344,13 +347,7 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             segs[7] = MAX7219Display::digit((int)kSignatures[val]);
             break;
         case MENU_ACC:
-            if (val == 1) {
-                segs[5] = CH_S; segs[6] = CH_t; segs[7] = CH_d;  // Std
-            } else {
-                segs[5] = MAX7219Display::SEG_BLANK;
-                segs[6] = (val == 0) ? CH_L : CH_h;
-                segs[7] = (val == 0) ? CH_o : CH_i;               // Lo / Hi
-            }
+            render_int3(segs, kNudgeMs[val]);
             break;
         case MENU_BRIT:
             render_int3(segs, val);
@@ -388,6 +385,20 @@ static void update_display() {
     lastUpdate = now_ms();
 
     uint8_t segs[8] = {};
+
+    if (appMode == MODE_NORMAL && g_wifi_as_ap) {
+        uint32_t now = now_ms();
+        if (now - s_ap_step_ms >= 500) {
+            s_ap_step_ms = now;
+            for (int d = 0; d < 8; d++) {
+                int idx = s_ap_offset + d;
+                segs[d] = (idx >= 0 && idx < s_ap_len) ? s_ap_buf[idx] : MAX7219Display::SEG_BLANK;
+            }
+            display.setSegments(segs);
+            if (++s_ap_offset > s_ap_len) s_ap_offset = -7;
+        }
+        return;
+    }
 
     if (appMode == MODE_NORMAL) {
         if (!linkEnabled) {
@@ -519,14 +530,6 @@ static void show_boot_reboot() {
     esp_restart();
 }
 
-// ── IP splash ──────────────────────────────────────────────────────────────────
-
-static void fill_octet(uint8_t *slots, int val) {
-    slots[2] = MAX7219Display::digit(val % 10); val /= 10;
-    slots[1] = val ? MAX7219Display::digit(val % 10) : MAX7219Display::SEG_BLANK; val /= 10;
-    slots[0] = val ? MAX7219Display::digit(val % 10) : MAX7219Display::SEG_BLANK;
-}
-
 static uint8_t char_to_seg(char c) {
     if (c >= '0' && c <= '9') return MAX7219Display::digit(c - '0');
     switch (c) {
@@ -543,7 +546,7 @@ static uint8_t char_to_seg(char c) {
 }
 
 // Scrolls "label ip" right-to-left across the 8-digit display, 500 ms per step.
-// Dots in ip are merged as DP onto the preceding digit.
+// Dots in ip become blank separator digits.
 static void show_scroll_splash(const char *label, const char *ip) {
     uint8_t buf[48] = {};
     int len = 0;
@@ -552,7 +555,7 @@ static void show_scroll_splash(const char *label, const char *ip) {
     buf[len++] = MAX7219Display::SEG_BLANK;
     for (int i = 0; ip[i] && len < 47; i++) {
         if (ip[i] == '.') {
-            if (len > 0) buf[len - 1] |= MAX7219Display::SEG_DP;
+            buf[len++] = MAX7219Display::SEG_BLANK;
         } else {
             buf[len++] = char_to_seg(ip[i]);
         }
@@ -568,11 +571,25 @@ static void show_scroll_splash(const char *label, const char *ip) {
     }
 }
 
+static void ap_scroll_init() {
+    s_ap_len = 0;
+    s_ap_offset = -7;
+    s_ap_step_ms = 0;
+    const char *label = "AP";
+    const char *ip    = "192.168.4.1";
+    for (int i = 0; label[i] && s_ap_len < 30; i++)
+        s_ap_buf[s_ap_len++] = char_to_seg(label[i]);
+    s_ap_buf[s_ap_len++] = MAX7219Display::SEG_BLANK;
+    for (int i = 0; ip[i] && s_ap_len < 31; i++) {
+        if (ip[i] == '.') s_ap_buf[s_ap_len++] = MAX7219Display::SEG_BLANK;
+        else               s_ap_buf[s_ap_len++] = char_to_seg(ip[i]);
+    }
+}
+
 // ── WiFi & HTTP config server ──────────────────────────────────────────────────
 
 static bool           s_wifi_joined      = false;
 static bool           g_sta_failed       = false;
-static bool           g_show_ap_splash   = false;
 static char           g_wifi_ip_str[16]  = {};
 static uint32_t       s_wifi_start_ms    = 0;
 static bool           g_wifi_initialized = false;
@@ -624,13 +641,18 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<title>tapbox</title><style>"
         "*{box-sizing:border-box}"
         "body{font:15px sans-serif;max-width:400px;margin:20px auto;padding:0 15px}"
-        "h3{margin:14px 0 4px}"
+        "h2{margin-bottom:4px}h3{margin:14px 0 4px}"
         "label{display:block;margin:6px 0 1px;font-size:13px;color:#555}"
         "input,select{width:100%;padding:7px;border:1px solid #ccc;border-radius:3px}"
-        "button{width:100%;padding:11px;margin-top:10px;background:#07c;color:#fff;"
-        "border:none;border-radius:3px;font-size:15px;cursor:pointer}"
+        "button{width:100%;padding:11px;margin-top:12px;border:none;"
+        "border-radius:3px;font-size:15px;cursor:pointer}"
+        ".btn-net{background:#c60;color:#fff}"
+        ".btn-disp{background:#07c;color:#fff}"
+        "hr{margin:24px 0;border:none;border-top:2px solid #eee}"
         "#sb{display:none}"
-        "</style></head><body><h2>tapbox</h2>"
+        "</style></head><body>"
+        "<h2>tapbox</h2>"
+
         "<form method=post action=/save>"
         "<h3>WiFi</h3>"
         "<label>Network name (SSID)</label>");
@@ -659,9 +681,15 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<label>Gateway</label><input name=gw value=\"%d.%d.%d.%d\"></div>",
         g_gt[0], g_gt[1], g_gt[2], g_gt[3]);
     httpd_resp_sendstr_chunk(req, tmp);
-
     httpd_resp_sendstr_chunk(req,
-        "<h3>Display</h3><label>Time signature</label><select name=sig>");
+        "<button class=btn-net>Save Network &mdash; tapbox will reboot</button>"
+        "</form>"
+
+        "<hr>"
+
+        "<form method=post action=/apply>"
+        "<h3>Display</h3>"
+        "<label>Time signature</label><select name=sig>");
     static const char *sigs[] = {"2","3","4","5","6","7"};
     for (int i = 0; i < 6; i++) {
         snprintf(tmp, sizeof(tmp), "<option value=%d%s>%s</option>",
@@ -673,16 +701,17 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<label>Brightness (1-15)</label>"
         "<input name=brit type=number min=1 max=15 value=%d>", g_brit);
     httpd_resp_sendstr_chunk(req, tmp);
-    httpd_resp_sendstr_chunk(req, "<label>Accuracy</label><select name=acc>");
-    static const char *accs[] = {"Low","Standard","High"};
-    for (int i = 0; i < 3; i++) {
-        snprintf(tmp, sizeof(tmp), "<option value=%d%s>%s</option>",
-            i, i == g_accIdx ? " selected" : "", accs[i]);
+    httpd_resp_sendstr_chunk(req, "<label>Nudge size</label><select name=acc>");
+    for (int i = 0; i < kNudgeCount; i++) {
+        snprintf(tmp, sizeof(tmp), "<option value=%d%s>%d ms</option>",
+            i, i == g_nudgeIdx ? " selected" : "", kNudgeMs[i]);
         httpd_resp_sendstr_chunk(req, tmp);
     }
     httpd_resp_sendstr_chunk(req,
         "</select>"
-        "<button>Save &amp; reboot</button></form>"
+        "<button class=btn-disp>Save Display Settings</button>"
+        "</form>"
+
         "<script>"
         "var s=document.querySelector('[name=net]');"
         "if(s.value==='1')document.getElementById('sb').style.display='block'"
@@ -691,17 +720,20 @@ static esp_err_t http_get_root(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static esp_err_t http_post_save(httpd_req_t *req) {
+static char *recv_body(httpd_req_t *req) {
     int total = req->content_len;
-    if (total <= 0 || total > 1024) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request");
-        return ESP_FAIL;
-    }
+    if (total <= 0 || total > 1024) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request"); return nullptr; }
     char *body = (char *)malloc(total + 1);
-    if (!body) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+    if (!body) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return nullptr; }
     int received = httpd_req_recv(req, body, total);
-    if (received <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv"); return ESP_FAIL; }
+    if (received <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv"); return nullptr; }
     body[received] = '\0';
+    return body;
+}
+
+static esp_err_t http_post_save(httpd_req_t *req) {
+    char *body = recv_body(req);
+    if (!body) return ESP_FAIL;
 
     char tmp[64], ip_str[20];
     if (form_field(body, "ssid", tmp, sizeof(tmp)) && tmp[0])
@@ -715,20 +747,16 @@ static esp_err_t http_post_save(httpd_req_t *req) {
         sscanf(ip_str, "%d.%d.%d.%d", &g_sn[0], &g_sn[1], &g_sn[2], &g_sn[3]);
     if (form_field(body, "gw", ip_str, sizeof(ip_str)))
         sscanf(ip_str, "%d.%d.%d.%d", &g_gt[0], &g_gt[1], &g_gt[2], &g_gt[3]);
-    if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount) g_sigIdx = v; }
-    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 15)       g_brit   = v; }
-    if (form_field(body, "acc",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kAccCount) g_accIdx = v; }
     free(body);
 
     nvs_save_settings();
     nvs_save_wifi();
-    apply_settings();
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_sendstr(req,
         "<!DOCTYPE html><html><body>"
         "<h2>Saved. tapbox is rebooting...</h2>"
-        "<p>Reconnect to your WiFi network if needed, "
+        "<p>Reconnect to your network if needed, "
         "then visit <a href='http://tapbox.local'>tapbox.local</a></p>"
         "</body></html>");
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -736,14 +764,36 @@ static esp_err_t http_post_save(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t http_post_apply(httpd_req_t *req) {
+    char *body = recv_body(req);
+    if (!body) return ESP_FAIL;
+
+    char tmp[64];
+    if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount) g_sigIdx = v; }
+    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 15)       g_brit   = v; }
+    if (form_field(body, "acc",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kNudgeCount) g_nudgeIdx = v; }
+    free(body);
+
+    nvs_save_settings();
+    apply_settings();
+
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_send(req, nullptr, 0);
+    return ESP_OK;
+}
+
 static void http_server_start() {
     if (s_httpd) return;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.max_uri_handlers = 4;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) { s_httpd = nullptr; return; }
-    httpd_uri_t get_h  = { .uri = "/",     .method = HTTP_GET,  .handler = http_get_root,  .user_ctx = nullptr };
-    httpd_uri_t post_h = { .uri = "/save", .method = HTTP_POST, .handler = http_post_save, .user_ctx = nullptr };
+    httpd_uri_t get_h   = { .uri = "/",      .method = HTTP_GET,  .handler = http_get_root,   .user_ctx = nullptr };
+    httpd_uri_t save_h  = { .uri = "/save",  .method = HTTP_POST, .handler = http_post_save,  .user_ctx = nullptr };
+    httpd_uri_t apply_h = { .uri = "/apply", .method = HTTP_POST, .handler = http_post_apply, .user_ctx = nullptr };
     httpd_register_uri_handler(s_httpd, &get_h);
-    httpd_register_uri_handler(s_httpd, &post_h);
+    httpd_register_uri_handler(s_httpd, &save_h);
+    httpd_register_uri_handler(s_httpd, &apply_h);
     printf("HTTP config server started\n");
 }
 
@@ -809,7 +859,7 @@ static void wifi_start_ap() {
     g_wifi_as_ap    = true;
     s_wifi_joined   = false;
     s_wifi_start_ms = now_ms();
-    g_show_ap_splash = true;
+    ap_scroll_init();
     printf("WiFi AP: tapbox (open) — config at 192.168.4.1\n");
 }
 
@@ -881,6 +931,7 @@ static void reset_downbeat() {
 }
 
 static void go_live(double bpm, uint32_t sessionStartMs) {
+    if (g_wifi_as_ap) return;
     abl_link_enable(s_link, true);
     linkEnabled = true;
     uint64_t linkNow    = now_us();
@@ -1127,10 +1178,10 @@ static void osc_handle(const uint8_t *buf, int len) {
         printf("OSC bpm: %.1f\n", tapTempo.bpm());
     } else if (strcmp(addr, "/nudge_up") == 0) {
         nudge_phase(g_nudgeUs);
-        printf("OSC nudge +%dms\n", kAccNudgeMs[g_accIdx]);
+        printf("OSC nudge +%dms\n", kNudgeMs[g_nudgeIdx]);
     } else if (strcmp(addr, "/nudge_down") == 0) {
         nudge_phase(-g_nudgeUs);
-        printf("OSC nudge -%dms\n", kAccNudgeMs[g_accIdx]);
+        printf("OSC nudge -%dms\n", kNudgeMs[g_nudgeIdx]);
     } else if (strcmp(addr, "/downbeat") == 0) {
         reset_downbeat();
         printf("OSC downbeat reset\n");
@@ -1235,25 +1286,24 @@ extern "C" void app_main(void) {
     esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_CONNECTED,   eth_connected_cb, nullptr);
     esp_event_handler_register(IP_EVENT,  IP_EVENT_ETH_GOT_IP,         eth_got_ip_cb, nullptr);
 
+    s_link    = abl_link_create(120.0);
+    s_session = abl_link_create_session_state();
+    tapTempo.setBpm(120.0);
+
     if (ethConnected) {
         printf("IP: %s\n", ethIPStr);
+        abl_link_enable(s_link, true);
+        linkEnabled = true;
+        abl_link_capture_app_session_state(s_link, s_session);
+        abl_link_set_tempo(s_session, 120.0, now_us());
+        abl_link_commit_app_session_state(s_link, s_session);
+        printf("Link live at 120.0 BPM\n");
         http_server_start();
         show_scroll_splash("Eth", ethIPStr);
         if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
     } else {
-        printf("No Ethernet — running standalone\n");
+        printf("No Ethernet — waiting for WiFi\n");
     }
-
-    s_link    = abl_link_create(120.0);
-    s_session = abl_link_create_session_state();
-
-    tapTempo.setBpm(120.0);
-    abl_link_enable(s_link, true);
-    linkEnabled = true;
-    abl_link_capture_app_session_state(s_link, s_session);
-    abl_link_set_tempo(s_session, 120.0, now_us());
-    abl_link_commit_app_session_state(s_link, s_session);
-    printf("Link live at 120.0 BPM\n");
 
     // Confirm to the bootloader that this firmware booted successfully.
     // If the device was just OTA-updated, this prevents rollback on next boot.
@@ -1276,10 +1326,6 @@ extern "C" void app_main(void) {
             g_eth_lost = false;
             printf("Ethernet lost — starting WiFi\n");
             wifi_init();
-        }
-        if (g_show_ap_splash) {
-            g_show_ap_splash = false;
-            show_scroll_splash("AP", "192.168.4.1");
         }
         if (g_wifi_got_ip) {
             g_wifi_got_ip = false;
