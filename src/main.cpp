@@ -36,6 +36,7 @@
 #define DEBOUNCE_MS     5
 #define DISPLAY_MS      50
 #define MENU_TIMEOUT_MS 6000
+#define LONG_PRESS_MS   2000
 #define OSC_PORT        8000
 #define OTA_URL         "https://dinther.github.io/tapbox/firmware.bin"
 
@@ -97,10 +98,13 @@ static abl_link_session_state s_session;
 static bool   linkEnabled = false;
 static double linkQuantum = 4.0;
 
-static int      lastButton   = 1;
+static int      lastButton      = 1;
+static uint32_t lastDebounce    = 0;
+static uint32_t s_btnPressedAt  = 0;
+static bool     s_btnLongFired  = false;
+
 static int      lastEncSw    = 1;
 static int      lastEncA     = 1;
-static uint32_t lastDebounce = 0;
 static uint32_t lastEncSwDb  = 0;
 static uint32_t lastEncTurn  = 0;
 
@@ -563,15 +567,122 @@ static void do_tap() {
     }
 }
 
+static void on_button_short_press() {
+    uint32_t now = now_ms();
+    switch (appMode) {
+        case MODE_MENU_NAV: {
+            int next = menuItem;
+            do { next = (next + 1) % MENU_COUNT; } while (!menu_item_visible(next));
+            menuItem      = next;
+            menuEnteredAt = now;
+            break;
+        }
+        case MODE_MENU_EDIT: {
+            int lo = menu_val_min(menuItem), hi = menu_val_max(menuItem);
+            menuEditVal = lo + ((menuEditVal - lo + 1 + (hi - lo + 1)) % (hi - lo + 1));
+            if (menuItem == MENU_BRIT) display.setIntensity(menuEditVal);
+            menuEnteredAt = now;
+            break;
+        }
+        case MODE_MENU_CONFIRM:
+            appMode       = MODE_MENU_NAV;
+            menuEnteredAt = now;
+            break;
+        case MODE_SUBMENU_NAV:
+            menuSubItem   = (menuSubItem + 1) % 5;
+            menuEnteredAt = now;
+            break;
+        case MODE_SUBMENU_EDIT:
+            menuEditVal   = (menuEditVal + 1) % 256;
+            menuEnteredAt = now;
+            break;
+        default: break;
+    }
+}
+
+static void on_button_long_press() {
+    uint32_t now = now_ms();
+    switch (appMode) {
+        case MODE_NORMAL:
+            appMode       = MODE_MENU_NAV;
+            menuEnteredAt = now;
+            break;
+        case MODE_MENU_NAV:
+            if (menuItem == MENU_DONE) {
+                exit_menu();
+            } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
+                menuEnteredAt = now;
+            } else if (menuItem == MENU_UPD) {
+                perform_ota();
+            } else if (menuItem == MENU_RESET) {
+                appMode       = MODE_MENU_CONFIRM;
+                menuEnteredAt = now;
+            } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
+                menuSubItem   = 0;
+                appMode       = MODE_SUBMENU_NAV;
+                menuEnteredAt = now;
+            } else {
+                menuEditVal   = menu_get_val(menuItem);
+                appMode       = MODE_MENU_EDIT;
+                menuEnteredAt = now;
+            }
+            break;
+        case MODE_MENU_EDIT: {
+            bool netChanged = (menuItem == MENU_NET && menuEditVal != g_net);
+            menu_commit(menuItem, menuEditVal);
+            apply_settings();
+            nvs_save_settings();
+            if (netChanged) show_boot_reboot();
+            appMode       = MODE_MENU_NAV;
+            menuEnteredAt = now;
+            break;
+        }
+        case MODE_MENU_CONFIRM:
+            factory_reset();  // does not return
+            break;
+        case MODE_SUBMENU_NAV:
+            if (menuSubItem == 4) {
+                appMode       = MODE_MENU_NAV;
+                menuEnteredAt = now;
+            } else {
+                menuEditVal   = submenu_array()[menuSubItem];
+                appMode       = MODE_SUBMENU_EDIT;
+                menuEnteredAt = now;
+            }
+            break;
+        case MODE_SUBMENU_EDIT:
+            submenu_array()[menuSubItem] = menuEditVal;
+            nvs_save_settings();
+            appMode       = MODE_SUBMENU_NAV;
+            menuEnteredAt = now;
+            break;
+    }
+}
+
 static void handle_button() {
     int      reading = gpio_get_level(PIN_TAP_BUTTON);
     uint32_t now     = now_ms();
-    if (reading == 0 && lastButton == 1 && (now - lastDebounce) > DEBOUNCE_MS) {
+
+    if (reading != lastButton && (now - lastDebounce) >= DEBOUNCE_MS) {
         lastDebounce = now;
-        if (appMode != MODE_NORMAL) exit_menu();
-        do_tap();
+
+        if (reading == 0) {
+            // Falling edge — button pressed
+            s_btnPressedAt = now;
+            s_btnLongFired = false;
+            if (appMode == MODE_NORMAL) do_tap();
+        } else {
+            // Rising edge — button released
+            if (!s_btnLongFired) on_button_short_press();
+        }
     }
     lastButton = reading;
+
+    // Long press fires at threshold while button is still held
+    if (reading == 0 && !s_btnLongFired && (now - s_btnPressedAt) >= LONG_PRESS_MS) {
+        s_btnLongFired = true;
+        on_button_long_press();
+    }
 }
 
 static void handle_encoder() {
