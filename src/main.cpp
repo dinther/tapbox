@@ -24,19 +24,18 @@
 
 // ── Pin assignments ────────────────────────────────────────────────────────────
 #define PIN_TAP_BUTTON  GPIO_NUM_12
-#define PIN_ENC_A       GPIO_NUM_36
-#define PIN_ENC_B       GPIO_NUM_39
-#define PIN_ENC_SW      GPIO_NUM_35
+#define PIN_SELECT      GPIO_NUM_4
 #define PIN_DISP_CLK    GPIO_NUM_14
 #define PIN_DISP_DIN    GPIO_NUM_2
 #define PIN_DISP_LOAD   GPIO_NUM_15
-#define PIN_BATT_ADC    GPIO_NUM_4
+#define PIN_BATT_ADC    GPIO_NUM_36  // ADC1_CH0
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 #define DEBOUNCE_MS     5
 #define DISPLAY_MS      50
 #define MENU_TIMEOUT_MS 6000
 #define LONG_PRESS_MS   2000
+#define SELECT_LONG_MS  1000
 #define OSC_PORT        8000
 #define OTA_URL         "https://dinther.github.io/tapbox/firmware.bin"
 
@@ -64,7 +63,7 @@ static constexpr uint8_t CH_u = 0x1C;
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 2
+#define FW_MINOR 3
 #define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
@@ -91,7 +90,7 @@ static int    g_nudgeUs = 20000;
 // ── Core globals ───────────────────────────────────────────────────────────────
 static TapTempo                  tapTempo;
 static MAX7219Display            display(PIN_DISP_CLK, PIN_DISP_DIN, PIN_DISP_LOAD);
-static adc_oneshot_unit_handle_t s_adc2 = nullptr;
+static adc_oneshot_unit_handle_t s_adc1 = nullptr;
 
 static abl_link               s_link;
 static abl_link_session_state s_session;
@@ -102,11 +101,12 @@ static int      lastButton      = 1;
 static uint32_t lastDebounce    = 0;
 static uint32_t s_btnPressedAt  = 0;
 static bool     s_btnLongFired  = false;
+static uint32_t s_btnAutoIncrAt = 0;
 
-static int      lastEncSw    = 1;
-static int      lastEncA     = 1;
-static uint32_t lastEncSwDb  = 0;
-static uint32_t lastEncTurn  = 0;
+static int      lastSelect      = 1;
+static uint32_t lastSelectDb    = 0;
+static uint32_t s_selPressedAt  = 0;
+static bool     s_selLongFired  = false;
 
 // ── Menu state ─────────────────────────────────────────────────────────────────
 enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
@@ -271,13 +271,13 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
 };
 
 static int read_battery_pct() {
-    if (!s_adc2) return 0;
+    if (!s_adc1) return 0;
 
     // Average 16 samples to reduce ADC noise
     int32_t sum = 0;
     for (int i = 0; i < 16; i++) {
         int raw = 0;
-        adc_oneshot_read(s_adc2, ADC_CHANNEL_0, &raw);
+        adc_oneshot_read(s_adc1, ADC_CHANNEL_0, &raw);
         sum += raw;
     }
     // 100k/100k divider, ADC_ATTEN_DB_12 full scale ≈ 3900 mV at raw 4095
@@ -567,6 +567,7 @@ static void do_tap() {
     }
 }
 
+// Tap button: cycles items/values in menu; auto-increments in edit modes while held
 static void on_button_short_press() {
     uint32_t now = now_ms();
     switch (appMode) {
@@ -584,10 +585,6 @@ static void on_button_short_press() {
             menuEnteredAt = now;
             break;
         }
-        case MODE_MENU_CONFIRM:
-            appMode       = MODE_MENU_NAV;
-            menuEnteredAt = now;
-            break;
         case MODE_SUBMENU_NAV:
             menuSubItem   = (menuSubItem + 1) % 5;
             menuEnteredAt = now;
@@ -600,7 +597,54 @@ static void on_button_short_press() {
     }
 }
 
-static void on_button_long_press() {
+static void handle_button() {
+    int      reading = gpio_get_level(PIN_TAP_BUTTON);
+    uint32_t now     = now_ms();
+
+    if (reading != lastButton && (now - lastDebounce) >= DEBOUNCE_MS) {
+        lastDebounce = now;
+        if (reading == 0) {
+            s_btnPressedAt  = now;
+            s_btnLongFired  = false;
+            s_btnAutoIncrAt = now;
+            if (appMode == MODE_NORMAL) do_tap();
+        } else {
+            if (!s_btnLongFired) on_button_short_press();
+        }
+    }
+    lastButton = reading;
+
+    // Auto-increment while held in edit modes (starts at 500 ms, speeds up at 1500 ms)
+    bool inEdit = (appMode == MODE_MENU_EDIT || appMode == MODE_SUBMENU_EDIT);
+    if (reading == 0 && inEdit) {
+        uint32_t held     = now - s_btnPressedAt;
+        uint32_t interval = (held < 1500) ? 200 : 50;
+        if (held >= 500 && (now - s_btnAutoIncrAt) >= interval) {
+            s_btnAutoIncrAt = now;
+            s_btnLongFired  = true;
+            if (appMode == MODE_MENU_EDIT) {
+                int lo = menu_val_min(menuItem), hi = menu_val_max(menuItem);
+                menuEditVal = lo + ((menuEditVal - lo + 1 + (hi - lo + 1)) % (hi - lo + 1));
+                if (menuItem == MENU_BRIT) display.setIntensity(menuEditVal);
+            } else {
+                menuEditVal = (menuEditVal + 1) % 256;
+            }
+            menuEnteredAt = now;
+        }
+    }
+
+    // Long press in normal mode only: enter menu
+    if (reading == 0 && !s_btnLongFired && (now - s_btnPressedAt) >= LONG_PRESS_MS) {
+        s_btnLongFired = true;
+        if (appMode == MODE_NORMAL) {
+            appMode       = MODE_MENU_NAV;
+            menuEnteredAt = now;
+        }
+    }
+}
+
+// Select button: confirm/enter on short press; back/exit on long press
+static void on_select_short_press() {
     uint32_t now = now_ms();
     switch (appMode) {
         case MODE_NORMAL:
@@ -659,134 +703,42 @@ static void on_button_long_press() {
     }
 }
 
-static void handle_button() {
-    int      reading = gpio_get_level(PIN_TAP_BUTTON);
-    uint32_t now     = now_ms();
-
-    if (reading != lastButton && (now - lastDebounce) >= DEBOUNCE_MS) {
-        lastDebounce = now;
-
-        if (reading == 0) {
-            // Falling edge — button pressed
-            s_btnPressedAt = now;
-            s_btnLongFired = false;
-            if (appMode == MODE_NORMAL) do_tap();
-        } else {
-            // Rising edge — button released
-            if (!s_btnLongFired) on_button_short_press();
-        }
-    }
-    lastButton = reading;
-
-    // Long press fires at threshold while button is still held
-    if (reading == 0 && !s_btnLongFired && (now - s_btnPressedAt) >= LONG_PRESS_MS) {
-        s_btnLongFired = true;
-        on_button_long_press();
+static void on_select_long_press() {
+    uint32_t now = now_ms();
+    switch (appMode) {
+        case MODE_SUBMENU_NAV:
+        case MODE_SUBMENU_EDIT:
+            appMode       = MODE_MENU_NAV;
+            menuEnteredAt = now;
+            break;
+        case MODE_MENU_NAV:
+        case MODE_MENU_EDIT:
+        case MODE_MENU_CONFIRM:
+            exit_menu();
+            break;
+        default: break;
     }
 }
 
-static void handle_encoder() {
-    int      a   = gpio_get_level(PIN_ENC_A);
-    int      b   = gpio_get_level(PIN_ENC_B);
-    int      sw  = gpio_get_level(PIN_ENC_SW);
-    uint32_t now = now_ms();
+static void handle_select() {
+    int      reading = gpio_get_level(PIN_SELECT);
+    uint32_t now     = now_ms();
 
-    // ── Turn ──────────────────────────────────────────────────────────────────
-    if (a == 0 && lastEncA == 1 && (now - lastEncTurn) > DEBOUNCE_MS) {
-        lastEncTurn = now;
-        int dir = (b == 1) ? 1 : -1;
-
-        if (appMode == MODE_MENU_NAV) {
-            // Advance, skipping items not visible in the current net mode
-            int next = menuItem;
-            do { next = (next + MENU_COUNT + dir) % MENU_COUNT; }
-            while (!menu_item_visible(next));
-            menuItem      = next;
-            menuEnteredAt = now;
-        } else if (appMode == MODE_MENU_EDIT) {
-            int lo = menu_val_min(menuItem);
-            int hi = menu_val_max(menuItem);
-            if (menuItem == MENU_BRIT) {
-                menuEditVal += dir;
-                if (menuEditVal < lo) menuEditVal = lo;
-                if (menuEditVal > hi) menuEditVal = hi;
-                display.setIntensity(menuEditVal);
-            } else {
-                int range   = hi - lo + 1;
-                menuEditVal = lo + ((menuEditVal - lo + dir + range) % range);
-            }
-            menuEnteredAt = now;
-        } else if (appMode == MODE_SUBMENU_NAV) {
-            menuSubItem   = (menuSubItem + 5 + dir) % 5;
-            menuEnteredAt = now;
-        } else if (appMode == MODE_SUBMENU_EDIT) {
-            menuEditVal   = (menuEditVal + dir + 256) % 256;
-            menuEnteredAt = now;
-        } else if (appMode == MODE_NORMAL && linkEnabled) {
-            abl_link_capture_app_session_state(s_link, s_session);
-            double newBpm = abl_link_tempo(s_session) + dir * g_bpmStep;
-            tapTempo.setBpm(newBpm);
-            set_link_tempo(tapTempo.bpm());
-            printf("Enc: %.1f BPM\n", tapTempo.bpm());
+    if (reading != lastSelect && (now - lastSelectDb) >= DEBOUNCE_MS) {
+        lastSelectDb = now;
+        if (reading == 0) {
+            s_selPressedAt = now;
+            s_selLongFired = false;
+        } else {
+            if (!s_selLongFired) on_select_short_press();
         }
     }
-    lastEncA = a;
+    lastSelect = reading;
 
-    // ── Press ─────────────────────────────────────────────────────────────────
-    if (sw == 0 && lastEncSw == 1 && (now - lastEncSwDb) > DEBOUNCE_MS) {
-        lastEncSwDb = now;
-
-        if (appMode == MODE_NORMAL) {
-            appMode       = MODE_MENU_NAV;
-            menuEnteredAt = now;
-        } else if (appMode == MODE_MENU_NAV) {
-            if (menuItem == MENU_DONE) {
-                exit_menu();
-            } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
-                menuEnteredAt = now;  // read-only — reset timeout only
-            } else if (menuItem == MENU_UPD) {
-                perform_ota();
-            } else if (menuItem == MENU_RESET) {
-                appMode       = MODE_MENU_CONFIRM;
-                menuEnteredAt = now;
-            } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
-                menuSubItem   = 0;
-                appMode       = MODE_SUBMENU_NAV;
-                menuEnteredAt = now;
-            } else {
-                menuEditVal   = menu_get_val(menuItem);
-                appMode       = MODE_MENU_EDIT;
-                menuEnteredAt = now;
-            }
-        } else if (appMode == MODE_MENU_EDIT) {
-            bool netChanged = (menuItem == MENU_NET && menuEditVal != g_net);
-            menu_commit(menuItem, menuEditVal);
-            apply_settings();
-            nvs_save_settings();
-            if (netChanged) {
-                show_boot_reboot();  // does not return
-            }
-            appMode       = MODE_MENU_NAV;
-            menuEnteredAt = now;
-        } else if (appMode == MODE_SUBMENU_NAV) {
-            if (menuSubItem == 4) {
-                appMode       = MODE_MENU_NAV;
-                menuEnteredAt = now;
-            } else {
-                menuEditVal   = submenu_array()[menuSubItem];
-                appMode       = MODE_SUBMENU_EDIT;
-                menuEnteredAt = now;
-            }
-        } else if (appMode == MODE_SUBMENU_EDIT) {
-            submenu_array()[menuSubItem] = menuEditVal;
-            nvs_save_settings();
-            appMode       = MODE_SUBMENU_NAV;
-            menuEnteredAt = now;
-        } else if (appMode == MODE_MENU_CONFIRM) {
-            factory_reset();  // does not return — reboots
-        }
+    if (reading == 0 && !s_selLongFired && (now - s_selPressedAt) >= SELECT_LONG_MS) {
+        s_selLongFired = true;
+        on_select_long_press();
     }
-    lastEncSw = sw;
 }
 
 static void check_menu_timeout() {
@@ -879,37 +831,25 @@ static void print_status() {
 // ── GPIO init ──────────────────────────────────────────────────────────────────
 
 static void init_gpio() {
-    // Encoder board supplies pull-ups on all three encoder pins (A, B, SW).
-    const gpio_num_t inputs_no_pullup[] = { PIN_ENC_SW, PIN_ENC_A, PIN_ENC_B };
-    for (gpio_num_t pin : inputs_no_pullup) {
-        gpio_config_t cfg = {
-            .pin_bit_mask = (1ULL << pin),
-            .mode         = GPIO_MODE_INPUT,
-            .pull_up_en   = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type    = GPIO_INTR_DISABLE,
-        };
-        gpio_config(&cfg);
-    }
-    gpio_config_t tap_cfg = {
-        .pin_bit_mask = (1ULL << PIN_TAP_BUTTON),
+    gpio_config_t btn_cfg = {
+        .pin_bit_mask = (1ULL << PIN_TAP_BUTTON) | (1ULL << PIN_SELECT),
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
-    gpio_config(&tap_cfg);
+    gpio_config(&btn_cfg);
 }
 
 static void init_adc() {
     adc_oneshot_unit_init_cfg_t unit_cfg = {};
-    unit_cfg.unit_id = ADC_UNIT_2;
-    adc_oneshot_new_unit(&unit_cfg, &s_adc2);
+    unit_cfg.unit_id = ADC_UNIT_1;
+    adc_oneshot_new_unit(&unit_cfg, &s_adc1);
 
     adc_oneshot_chan_cfg_t chan_cfg = {};
     chan_cfg.atten    = ADC_ATTEN_DB_12;
     chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
-    adc_oneshot_config_channel(s_adc2, ADC_CHANNEL_0, &chan_cfg);
+    adc_oneshot_config_channel(s_adc1, ADC_CHANNEL_0, &chan_cfg);
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────────
@@ -967,7 +907,7 @@ extern "C" void app_main(void) {
 
     while (true) {
         handle_button();
-        handle_encoder();
+        handle_select();
         check_menu_timeout();
         update_display();
         print_status();
