@@ -1,6 +1,6 @@
 # tapbox
 
-An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.ableton.com/en/link/) session over Ethernet. Built on the [WT32-ETH01](http://www.wireless-tag.com/portfolio/wt32-eth01/) module with a MAX7219 8-digit 7-segment display.
+An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.ableton.com/en/link/) session over Ethernet or WiFi. Built on the [WT32-ETH01](http://www.wireless-tag.com/portfolio/wt32-eth01/) module with a MAX7219 8-digit 7-segment display.
 
 <img width="994" height="768" alt="image" src="https://github.com/user-attachments/assets/c6e33068-3b57-4dc8-b9bd-07a2b8daecac" />
 
@@ -9,12 +9,13 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 
 - **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
-- **Encoder** — fine-tune BPM up/down; step size set by Acc. preset (Lo / Std / Hi)
+- **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
+- **WiFi** — connects to your WiFi network as a client; browser config page for credentials; auto-failover between Ethernet and WiFi
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
 - **Menu system** — on-device configuration with NVS persistence across power cycles
-- **Static or DHCP** — configure IP address, subnet, and gateway via menu sub-menus
+- **Static or DHCP** — configure IP address, subnet, and gateway via menu
 - **IP splash on boot** — displays assigned IP address across two screens at startup
-- **Battery level** — optional SoC readout via voltage divider on IO4
+- **Battery level** — optional SoC readout via voltage divider on IO36
 - **OTA updates** — pull and flash new firmware directly from the menu over Ethernet
 
 ## Hardware
@@ -23,22 +24,21 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 |-----------|------|
 | MCU / Ethernet | WT32-ETH01 (ESP32 + LAN8720A) |
 | Display | MAX7219 8-digit 7-segment module |
-| Input | Rotary encoder with push switch + momentary tap button |
+| Input | Two momentary push buttons (tap + select) |
 
 ### Pin Assignments
 
 | GPIO | Function |
 |------|----------|
 | IO12 | Tap button (internal pull-up) |
-| IO36 | Encoder A (encoder board pull-up) |
-| IO39 | Encoder B (encoder board pull-up) |
-| IO35 | Encoder switch (encoder board pull-up, input-only pin) |
+| IO4  | Select button (internal pull-up) |
+| IO36 | Battery ADC — midpoint of 100 kΩ / 100 kΩ voltage divider from battery+ to GND (optional) |
 | IO14 | MAX7219 CLK |
 | IO2  | MAX7219 DIN |
 | IO15 | MAX7219 LOAD/CS |
-| IO4  | Battery ADC — midpoint of 100 kΩ / 100 kΩ voltage divider from battery+ to GND (optional) |
 
-> GPIO 0, 16, 18, 19, 21, 22, 23, 25, 26, 27 are used by the onboard Ethernet — do not reassign.
+> GPIO 0, 16, 18, 19, 21, 22, 23, 25, 26, 27 are used by the onboard Ethernet — do not reassign.  
+> GPIO 34–39 are input-only (no internal pull-up). IO36 and IO39 are safe for ADC1 use alongside WiFi.
 
 ## Display Layout
 
@@ -54,10 +54,17 @@ Example: `120.0` at beat 3 of 4 with 2 peers → `·120.0 3 2`
 ```
 Value flashes at 4 Hz in edit mode.
 
-## Menu
+## Controls
 
-Press the encoder to enter the menu. Turn to navigate, press to edit a value, press again to confirm.  
-The tap button exits the menu immediately (and also performs a tap).
+| Action | Result |
+|--------|--------|
+| Tap button (normal mode) | Tap tempo |
+| Tap button (menu nav) | Advance to next item |
+| Tap button held (menu edit) | Auto-increment value (5/sec after 500 ms, 20/sec after 1500 ms) |
+| Select button short press | Enter menu / confirm / advance |
+| Select button long press (1 s) | Back / exit menu |
+
+## Menu
 
 | Label | Setting | Values |
 |-------|---------|--------|
@@ -68,16 +75,32 @@ The tap button exits the menu immediately (and also performs a tap).
 | `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
 | `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |
 | `Hub.` | Gateway | sub-menu: Oct1–Oct4, 0–255 each |
-| `rSEt` | Factory reset | confirm with second press |
-| `UPd.` | OTA firmware update | downloads firmware.bin from GitHub Pages and reboots |
+| `rSEt` | Factory reset | confirm with second select press |
+| `UPd.` | OTA firmware update | downloads firmware.bin from GitHub Pages and reboots (Ethernet required) |
 | `vEr ` | Firmware version | read-only; shows major.minor.patch |
-| `bAt ` | Battery level | read-only; shows 0–100 (requires IO4 voltage divider) |
+| `bAt ` | Battery level | read-only; shows 0–100 (requires IO36 voltage divider) |
+| `AP  ` | WiFi access point | restarts the "tapbox" config AP |
 | `done` | Exit menu | returns to normal mode |
 
-`Acc.` controls both the encoder BPM step and the OSC nudge amount together.  
+`Acc.` controls both the tap auto-increment step and the OSC nudge amount.  
 `IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
-Static IP defaults: `192.168.1.200` / `255.255.255.0` / `192.168.1.1`.  
 Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
+
+## WiFi
+
+tapbox prefers Ethernet. WiFi is used automatically when no Ethernet cable is present, and as a fallback if the cable is unplugged while running.
+
+**First-time setup:**
+
+1. Boot tapbox without an Ethernet cable (or use the `AP` menu item).
+2. Connect your phone or laptop to the **tapbox** open WiFi network.
+3. Open **http://192.168.4.1** in a browser.
+4. Enter your WiFi SSID and password, adjust any other settings, and tap **Save**.
+5. tapbox reboots and connects to your network as a client.
+
+The ESP32 radio supports **2.4 GHz only**. If your router broadcasts separate 2.4 GHz and 5 GHz SSIDs, use the 2.4 GHz one.
+
+WiFi shuts down automatically after 60 seconds if no connection is established.
 
 ## OSC Interface
 
@@ -104,7 +127,7 @@ Pre-built binaries are also available on the [Releases](https://github.com/dinth
 
 ## Building
 
-Requires [PlatformIO](https://platformio.org/) and the [abl_link](https://github.com/Ableton/link) C library.
+Requires [PlatformIO](https://platformio.org/).
 
 ```bash
 # Build

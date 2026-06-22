@@ -4,9 +4,9 @@
 
 ## What Is tapbox?
 
-tapbox is a compact, dedicated tempo controller for musicians and live performers who use Ableton Link. It sits on your desk or in your rack, connects to your network via Ethernet, and keeps every device in your setup locked to the same beat — without you having to touch a laptop.
+tapbox is a compact, dedicated tempo controller for musicians and live performers who use Ableton Link. It sits on your desk or in your rack, connects to your network via Ethernet or WiFi, and keeps every device in your setup locked to the same beat — without you having to touch a laptop.
 
-The idea is simple: tap the button on the beat to set your tempo, and tapbox broadcasts it to every Link-enabled device on the network. Your Ableton Live session, Resolume, MadMapper, LaserOS, your iOS apps, your hardware synths with Link support — they all lock in instantly. From that point on you can nudge the tempo up or down with the encoder knob, or send commands from a phone or tablet over OSC if you prefer to stay hands-free.
+The idea is simple: tap the button on the beat to set your tempo, and tapbox broadcasts it to every Link-enabled device on the network. Your Ableton Live session, Resolume, MadMapper, LaserOS, your iOS apps, your hardware synths with Link support — they all lock in instantly. From that point on you can send commands from a phone or tablet over OSC if you prefer to stay hands-free.
 
 tapbox is always on, always listening, and always in sync.
 
@@ -24,53 +24,78 @@ tapbox uses an 8-digit display that shows you everything you need at a glance. I
 
 Reading left to right:
 
-- **120.0** — the current tempo in BPM, updated in real time when members in the Link session adjust
+- **120.0** — the current tempo in BPM, updated in real time when any device in the Link session adjusts it
 - **3** — which beat of the bar you are on right now (this advances with the music)
 - **2** — how many other Link peers are connected to the session
 
-On startup, tapbox starts with the tempo of the existing link session if one exists otherwise it starts with the default tempo of 120 BPM. You can tap a new tempo whenever you are ready, or simply start adjusting the tempo using the encoder knob.
+On startup, tapbox joins the existing Link session tempo if one is already running, otherwise it starts at 120 BPM. You can tap a new tempo whenever you are ready.
 
 ### The Controls
 
-**Tap button** — the main button. Tap it in time with your music to set the tempo. A single tap will instantly sync the link session to the downbeat. (first beat in a bar). Tap also exits the menu immediately if you need to get back to playing in a hurry.
+tapbox has two buttons:
 
-**Encoder knob** — turn it to nudge the tempo up or down while playing. Press it to open the settings menu.
+**Tap button** — the main button. Tap it in time with your music to set the tempo. A single tap immediately defines the downbeat (first beat of the bar). Three more taps locks in the tempo. Pressing the tap button in the menu moves to the next item or increments a value — hold it to auto-increment.
+
+**Select button** — the confirm button. A short press enters the menu from normal mode, steps into an edit field, or confirms a value. Hold it for one second to go back or exit the menu.
 
 ---
 
 ## Setting the Tempo
 
-Tap the button in rhythm. The downbeat for the link session is immediately defined by the first tap. It takes three more taps before tapbox starts to adjust the tempo of the link session. The current tempo and beat progress is displayed live at all times.
+Tap the tap button in rhythm. The downbeat for the Link session is immediately defined by the first tap. It takes three more taps before tapbox starts to adjust the tempo of the Link session. The current tempo and beat progress is displayed live at all times.
 
 You do not have to be perfectly precise. tapbox averages the timing across all your taps, so the more taps in sequence, the more accurate the reading becomes.
 
 After you are locked in, any further taps continue to refine the tempo. tapbox considers the session established when you stop tapping for two seconds. Simply start tapping again to define a new tempo.
 
-### Adjusting Tempo on the Fly
-
-Turning the encoder knob adjusts the tempo up or down in small steps. This is ideal when you require a gradual tempo change called for by the music or when you slowly want to catch up with the downbeat that drifted away. The change is subtle and smooth, and every connected device follows along.
-
-The size of each step depends on the **Acc.** setting in the menu.
-
 ---
 
 ## Connecting to Your Network
 
-tapbox connects via the Ethernet port on the back. Plug in a standard network cable before powering on.
+### Ethernet
 
-On startup, tapbox displays the IP address it has been assigned across two brief screens — first the first two octets, then the last two. This tells you where to find it on the network if you want to send OSC commands.
+Plug a standard network cable into the Ethernet port before powering on. tapbox displays the assigned IP address across two brief screens at startup — first the first two octets, then the last two. This tells you where to find it on the network for OSC control.
 
-By default tapbox uses DHCP, meaning your router assigns it an address automatically. If you need a fixed, predictable address — for example, to lock in OSC routing from a DAW template that always sends to the same destination — you can configure a static IP, subnet and gateway in the menu.
+Ethernet is always preferred over WiFi. If both are available, tapbox uses Ethernet.
+
+### WiFi
+
+tapbox can connect to your WiFi network and run Ableton Link over it. This is useful when your performance space does not have an Ethernet switch nearby, or when you need to sync with a device that is on WiFi and your router bridges multicast between the two interfaces.
+
+**The ESP32 radio supports 2.4 GHz only.** If your router has separate 2.4 GHz and 5 GHz networks (often shown as two different SSIDs, or a combined band with a single SSID), make sure you use the 2.4 GHz SSID when entering credentials.
+
+#### First-time WiFi setup
+
+1. Boot tapbox without an Ethernet cable plugged in, or select `AP` from the menu at any time.
+2. tapbox creates an open WiFi network called **tapbox**.
+3. Connect your phone or laptop to the **tapbox** network.
+4. Open **http://192.168.4.1** in your browser.
+5. Enter your WiFi network name (SSID) and password. The SSID field is case-sensitive — copy it exactly from your phone's WiFi list.
+6. Adjust any other settings if needed, then tap **Save**.
+7. tapbox saves the credentials and reboots. It connects to your network as a WiFi client and displays its assigned IP address.
+
+#### Changing WiFi credentials later
+
+Select `AP` in the menu. tapbox restarts its access point so you can connect and update the credentials via the same browser page.
+
+#### Automatic Ethernet / WiFi switching
+
+tapbox switches interfaces automatically without a reboot:
+
+- **Ethernet plugged in** → tapbox stops WiFi and switches Link to Ethernet.
+- **Ethernet unplugged** → tapbox starts WiFi (connecting to stored credentials, or starting the access point if none are stored).
+
+If WiFi does not establish a connection within 60 seconds, it shuts down automatically to save power.
+
+By default tapbox uses DHCP for the Ethernet connection. If you need a fixed address, configure a static IP in the `Lan.` / `IP` / `Sub.` / `Hub.` menu items.
 
 ---
 
 ## The Settings Menu
 
-Press the encoder knob to open the menu. Turn the knob to move between settings, then press again to edit the selected one. Turn to change the value, press to confirm. Press the encoder once more to return to the menu and continue navigating.
+Press the select button to open the menu. Press the tap button to move between items. Press the select button to enter edit mode for the selected item, then press the tap button to change the value (hold for fast auto-increment). Press select again to confirm and return to the menu.
 
-Some settings (IP address, subnet, gateway) open a sub-menu with individual octets. Navigate and edit them the same way, then select **done** and press to return to the main menu.
-
-If you want to leave at any point without saving, just press the tap button or wait six seconds — tapbox will return to normal mode on its own. When you next open the menu, it will return to the last item you were on rather than starting at the top.
+To go back from any edit or sub-menu, hold the select button for one second. To exit the menu entirely, hold select or wait six seconds — tapbox returns to normal mode without saving the current edit. When you next open the menu it returns to the last item you were on.
 
 ---
 
@@ -78,11 +103,11 @@ If you want to leave at any point without saving, just press the tap button or w
 
 **What it does:** tells tapbox how many beats are in a bar.
 
-The beat counter on the display counts from 1 up to this number, then loops back to 1. This keeps you visually oriented in the musical phrase, which is especially useful on stage when you cannot always hear every instrument clearly.
+The beat counter on the display counts from 1 up to this number, then loops back to 1. This keeps you visually oriented in the musical phrase.
 
 **Available values:** 2, 3, 4, 5, 6, 7
 
-**When to use it:** if you are playing a waltz or a piece in 3/4, set this to 3 so the counter runs 1–2–3–1–2–3 rather than counting to 4 and going out of sync with the phrase. For odd-time signatures like 7/8, set it to 7.
+**When to use it:** if you are playing a waltz in 3/4, set this to 3 so the counter runs 1–2–3 rather than counting to 4 and going out of sync with the phrase. For odd-time signatures like 7/8, set it to 7.
 
 *Default: 4*
 
@@ -90,19 +115,19 @@ The beat counter on the display counts from 1 up to this number, then loops back
 
 ### Acc. — Accuracy
 
-**What it does:** sets the control sensitivity for both the encoder knob and OSC nudge commands in a single step.
+**What it does:** sets the control sensitivity for both the tap auto-increment step (when holding the tap button in the menu) and OSC nudge commands.
 
-| Setting | Encoder step | OSC nudge |
-|---------|-------------|-----------|
-| **Lo** | 1.0 BPM per click | 50 ms |
-| **Std** | 0.5 BPM per click | 20 ms |
-| **Hi** | 0.1 BPM per click | 5 ms |
+| Setting | Value step | OSC nudge |
+|---------|-----------|-----------|
+| **Lo** | 1.0 BPM | 50 ms |
+| **Std** | 0.5 BPM | 20 ms |
+| **Hi** | 0.1 BPM | 5 ms |
 
-**Lo** is best for live performance where you need to shift tempo decisively between sections — fewer turns of the knob to get where you are going, and a nudge big enough to feel when re-aligning two sources by ear.
+**Lo** is best for live performance where you need to shift tempo decisively between sections.
 
-**Std** is the everyday setting. Half a BPM per click gives you enough resolution to dial in a feel without overshooting, and a 20 ms nudge handles most phase drift situations cleanly.
+**Std** is the everyday setting. Half a BPM per step gives enough resolution without overshooting.
 
-**Hi** is for studio work where you are hunting for an exact tempo or need surgical phase correction — 0.1 BPM steps and 5 ms nudges let you inch toward the target without jumping past it.
+**Hi** is for studio work where you are hunting for an exact tempo or need surgical phase correction.
 
 *Default: Std*
 
@@ -112,9 +137,7 @@ The beat counter on the display counts from 1 up to this number, then loops back
 
 **What it does:** adjusts how bright the display glows, from a dim 1 up to a full-intensity 15.
 
-The display gives you a live preview as you turn the knob, so you can judge the right level for your environment without having to confirm and then go back in.
-
-**When to use it:** in a dark venue, a very bright display can be distracting to the audience or wash out in photographs. Turning it down to 3 or 4 keeps it readable for you without becoming a light show of its own. In a brightly lit studio, cranking it up to 15 makes it easy to read from across the room.
+The display gives you a live preview as you change the value. In a dark venue, turning it down to 3 or 4 keeps it readable without becoming distracting. In a brightly lit studio, 15 is easy to read from across the room.
 
 *Default: 7*
 
@@ -122,14 +145,14 @@ The display gives you a live preview as you turn the knob, so you can judge the 
 
 ### Lan. — Network Mode
 
-**What it does:** switches between automatic (DHCP) and manual (static) IP addressing.
+**What it does:** switches the Ethernet interface between automatic (DHCP) and manual (static) IP addressing.
 
-- **Auto** — your router assigns tapbox an IP address automatically every time it boots. This is the easiest option and works in most setups.
-- **Stat** — tapbox uses a fixed IP address that you configure yourself. The address never changes between reboots.
+- **Auto** — your router assigns tapbox an IP address automatically every time it boots.
+- **Stat** — tapbox uses a fixed IP address that you configure yourself.
 
-**When to use static:** if you send OSC commands to tapbox from a DAW or control surface, you may have the destination address hard-coded in your template. DHCP can occasionally assign a different address after a power cycle, which would break those connections. Setting a static IP means your routing always works, no reconfiguration needed.
+**When to use static:** if you send OSC commands from a DAW or control surface with a hard-coded destination address, a static IP ensures that address never changes between reboots.
 
-When you confirm a change to this setting, tapbox displays `bOOt` and restarts automatically to apply the new network configuration. No further action is needed.
+When you confirm a change to this setting, tapbox displays `bOOt` and restarts automatically.
 
 *Default: Auto*
 
@@ -137,15 +160,23 @@ When you confirm a change to this setting, tapbox displays `bOOt` and restarts a
 
 ### IP, Sub., Hub. — Static Network Address
 
-These three settings only appear in the menu when network mode is set to **Stat**. Each one opens a sub-menu with four octets labelled **Oct1** through **Oct4**.
+These three items only appear when network mode is **Stat**. Each opens a sub-menu with four octets labelled **Oct1** through **Oct4**.
 
-- **IP** — the static IP address you want tapbox to use (e.g. 192 . 168 . 1 . 50)
+- **IP** — the static IP address (e.g. 192 . 168 . 1 . 50)
 - **Sub.** — the subnet mask (e.g. 255 . 255 . 255 . 0)
 - **Hub.** — the gateway address, usually your router (e.g. 192 . 168 . 1 . 1)
 
-Press the encoder on any of these items to enter the sub-menu. Turn to move between Oct1–Oct4, press to edit the selected octet, turn to change the value (0–255), then press again to confirm. Navigate to **done** and press to return to the main menu, or press the tap button at any time to exit straight to normal mode.
+Press select to enter the sub-menu. Press the tap button to move between Oct1–Oct4 and the **done** item. Press select to edit an octet, tap to increment, select to confirm. Navigate to **done** and press select to return to the main menu.
 
-The factory defaults are **192.168.1.200** for the IP, **255.255.255.0** for the subnet, and **192.168.1.1** for the gateway — a sensible starting point for most home and studio networks. Adjust as needed for your setup.
+Factory defaults: **192.168.1.200** / **255.255.255.0** / **192.168.1.1**.
+
+---
+
+### rSEt — Factory Reset
+
+**What it does:** returns all settings to their original defaults, including clearing stored WiFi credentials.
+
+When you select `rSEt` and press select, the display shows `rSEt SurE`. Press select once more to confirm. tapbox resets accuracy to Std, brightness to 7, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1, and clears any saved WiFi SSID and password.
 
 ---
 
@@ -153,13 +184,11 @@ The factory defaults are **192.168.1.200** for the IP, **255.255.255.0** for the
 
 **What it does:** downloads the latest firmware from the internet and installs it automatically.
 
-When you select `UPd.` and press the encoder, tapbox connects to GitHub over Ethernet and downloads the latest release. The display shows a percentage as the download progresses. When it reaches 100, tapbox shows `donE` and reboots into the new firmware — the whole process takes around 30 seconds on a typical network connection.
+Select `UPd.` and press select. tapbox connects to GitHub over Ethernet and downloads the latest release. The display shows a percentage as the download progresses. When it reaches 100, tapbox shows `donE` and reboots.
 
-If something goes wrong (no network, server unreachable, download error) the display shows `Er` for a few seconds and then returns you to the menu without making any changes.
+If something goes wrong (no network, server unreachable) the display shows `Er` and returns you to the menu without making changes.
 
-**Requirements:** tapbox must be connected to the internet via Ethernet. The update uses HTTPS so there are no plain-text concerns on your local network.
-
-**After an update:** all your settings — tempo history, brightness, network configuration — are preserved. Only the firmware changes.
+**Requirements:** tapbox must be connected to the internet via Ethernet. OTA update does not run over WiFi.
 
 *This item does nothing if the Ethernet cable is unplugged.*
 
@@ -167,9 +196,7 @@ If something goes wrong (no network, server unreachable, download error) the dis
 
 ### vEr — Firmware Version
 
-**What it does:** shows the firmware version currently running on your tapbox.
-
-The display shows the version number as `major.minor.patch` — for example, version 1.1.0 appears as `1.1.0`. This is read-only; pressing the encoder simply resets the menu timeout.
+**What it does:** shows the firmware version currently running on your tapbox as `major.minor.patch` — for example, version 1.3.0 appears as `1.3.0`. Read-only.
 
 ---
 
@@ -177,34 +204,36 @@ The display shows the version number as `major.minor.patch` — for example, ver
 
 **What it does:** shows the estimated state of charge of the connected battery as a percentage from 0 to 100.
 
-This item is only meaningful if your tapbox has a battery connected via the optional voltage divider on IO4. If no voltage divider is fitted the reading will be unreliable and can be ignored.
+Requires a 100 kΩ / 100 kΩ voltage divider connected from battery positive to GND, with the midpoint wired to IO36. If not fitted the reading is meaningless.
 
-The reading updates smoothly and is filtered to avoid jitter, so it changes gradually rather than jumping between values. It is a guide rather than a precision instrument — expect accuracy of roughly ±10%.
-
-*This item is read-only. Requires the IO4 voltage divider hardware.*
+Accuracy is approximately ±10%. Read-only.
 
 ---
 
-### rSEt — Factory Reset
+### AP — WiFi Access Point
 
-**What it does:** returns all settings to their original defaults and clears any network configuration.
+**What it does:** restarts the tapbox WiFi access point so you can connect and update WiFi credentials or other settings via the browser.
 
-When you select rSEt and press the encoder, the display asks `rSEt SurE` to make sure you did not land here by accident. Press the encoder once more to confirm, and tapbox resets everything: accuracy back to Std, brightness back to 7, network back to Auto, static address restored to 192.168.1.200 / 255.255.255.0 / 192.168.1.1.
+After selecting `AP` and pressing confirm, tapbox creates the **tapbox** open WiFi network. Connect your phone or laptop to it and open **http://192.168.4.1**. The access point shuts down automatically after 60 seconds if no device connects.
 
-**When to use it:** if you have been experimenting with static IP settings and gotten yourself into a state where the device will not connect, a factory reset is the quickest way back to a working configuration.
+Use this item to change which WiFi network tapbox connects to, or to re-enter a password after changing it on the router.
+
+---
+
+### done — Exit Menu
+
+Returns to normal mode immediately.
 
 ---
 
 ## OSC Control
 
-tapbox listens for OSC messages on **UDP port 8000**. This lets you control it from Ableton Live, TouchOSC, Lemur, Max/MSP, or any other software that can send OSC over the network.
-
-Send your messages to the IP address shown on the display at boot.
+tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the IP address shown on the display at boot.
 
 | Command | What it does |
 |---------|-------------|
 | `/tap` | Same as pressing the tap button |
-| `/bpm <value>` | Set the tempo to a specific BPM directly |
+| `/bpm <value>` | Set the tempo to a specific BPM |
 | `/signature <value>` | Change the time signature (2 through 7) |
 | `/nudge_up` | Shift the beat phase forward by the nudge amount |
 | `/nudge_down` | Shift the beat phase backward by the nudge amount |
@@ -212,37 +241,50 @@ Send your messages to the IP address shown on the display at boot.
 
 **A few ways to put this to use:**
 
-- Map `/tap` to a pad on an MIDI controller via your DAW so the whole band can tap tempo from the stage without touching the tapbox unit.
+- Map `/tap` to a pad on a MIDI controller via your DAW so the whole band can tap tempo from the stage.
 - Send `/bpm 128` from an Ableton Live clip to snap the tempo to a specific value at the start of a track.
-- Use `/downbeat` at the top of a new section to re-align the beat grid when coming in after a break.
-- Assign `/nudge_up` and `/nudge_down` to fader buttons on a mixing desk to subtly push and pull the phase against another source, like a DJ mixer being blended in.
+- Use `/downbeat` at the top of a new section to re-align the beat grid after a break.
+- Assign `/nudge_up` and `/nudge_down` to fader buttons on a mixing desk to subtly push and pull the phase.
 
 ---
 
 ## Tips and Tricks
 
-**Tapping in from scratch:** for the most accurate reading, tap along with a steady source — a click track, a drum loop, or even a song playing in headphones. Four clean taps is all you need to go live.
+**Tapping in from scratch:** for the most accurate reading, tap along with a steady source — a click track, a drum loop, or a song in headphones. Four clean taps is all you need to go live.
 
-**The tap button exits the menu instantly.** If something happens on stage and you need to tap a new tempo, you do not have to navigate out of the menu first. Just tap — tapbox responds immediately and returns to normal mode.
+**The select button exits the menu.** Hold the select button for one second to back out or exit at any time, even mid-edit.
 
-**Brightness at gigs:** a useful habit is to set the brightness at soundcheck under the actual stage lighting conditions, then save it. What looks comfortable in daylight may be too bright or too dim under stage wash.
+**Brightness at gigs:** set the brightness at soundcheck under the actual stage lighting, then save it. What looks comfortable in daylight may be too bright or too dim under stage wash.
 
-**Using a static IP with OSC:** if you use tapbox regularly in the same studio or live rig, setting a static IP once means your OSC routing just works every time. Five minutes of setup saves you checking the IP address at every session.
+**Using a static IP with OSC:** setting a static IP once means your OSC routing works every time without checking the display at each session.
 
-**Keeping firmware up to date:** when a new release is available, navigate to `UPd.` in the menu and press the encoder while tapbox is connected to the internet. The update is automatic and takes about 30 seconds. Your settings are not affected.
+**WiFi SSID is case-sensitive.** If tapbox cannot connect (reason 201 in the serial log), check that the SSID in the config page matches exactly — including capital letters and spaces.
+
+**2.4 GHz only:** the ESP32 radio does not support 5 GHz WiFi. If your router broadcasts both bands under the same name, tapbox will find the 2.4 GHz one automatically. If it broadcasts them separately, enter the 2.4 GHz SSID.
+
+**Keeping firmware up to date:** navigate to `UPd.` while connected via Ethernet and press select. The update takes about 30 seconds. Settings are not affected.
 
 ---
 
 ## Troubleshooting
 
-**The IP address does not appear at boot.**
-tapbox could not connect to the network within 10 seconds. Check that the Ethernet cable is plugged in securely and that the other end is connected to a live switch or router.
+**The IP address does not appear at boot.**  
+tapbox could not connect to Ethernet within 10 seconds. Check the cable. If no cable is connected, tapbox will start WiFi instead.
 
-**My OSC messages are not reaching tapbox.**
-Confirm the IP address on the display at next boot and update your OSC destination. If you are using a static IP, verify that the address, subnet, and gateway are all correct and that the address is not in use by another device.
+**tapbox shows dashes on the display after boot.**  
+It is connected to the network but has not received any Link peers yet. This is normal — the display fills in once another Link device joins the session.
 
-**I set a static IP and now tapbox is unreachable.**
-Use the factory reset (rSEt in the menu) to return to Auto. The display will show the assigned address at the next boot.
+**WiFi connects but peers show 0.**  
+Ensure the other device (e.g. MadMapper on a laptop) is on the same network. Link uses UDP multicast — some routers do not bridge multicast between WiFi and Ethernet. If your PC is on Ethernet and tapbox is on WiFi, try connecting tapbox via Ethernet instead.
 
-**The tempo drifts slightly after many taps.**
-tapbox calculates BPM as an average across all taps in the session. Small variations in tap timing do shift the average, though the effect becomes smaller with each additional tap. For a locked-in tempo, tap steadily for 8 or more beats, then stop tapping and let the encoder handle any fine adjustments.
+**tapbox cannot find my WiFi network (or connects then immediately disconnects).**  
+Check that you entered the SSID exactly as it appears on your phone — SSIDs are case-sensitive. Also confirm the network is 2.4 GHz; the ESP32 cannot connect to 5 GHz networks. Use the `AP` menu item to reopen the config page.
+
+**My OSC messages are not reaching tapbox.**  
+Confirm the IP address on the display at next boot and update your OSC destination. If using a static IP, verify the address, subnet, and gateway are correct.
+
+**I set a static IP and now tapbox is unreachable.**  
+Use the factory reset (`rSEt` in the menu) to return to Auto DHCP. The display will show the assigned address at the next boot.
+
+**The tempo drifts slightly after many taps.**  
+tapbox calculates BPM as an average across all taps in the session. Small variations in tap timing do shift the average, though the effect becomes smaller with each additional tap. For a locked-in tempo, tap steadily for 8 or more beats, then stop and let Link hold the tempo.

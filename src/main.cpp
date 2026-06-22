@@ -115,6 +115,9 @@ static bool     s_selLongFired  = false;
 
 static bool     g_wifi_enabled  = false;
 static bool     g_wifi_as_ap    = false;
+static bool     g_wifi_got_ip   = false;
+static bool     g_eth_got_ip    = false;  // Ethernet came back after being down
+static bool     g_eth_lost      = false;  // Ethernet link dropped
 
 // ── Menu state ─────────────────────────────────────────────────────────────────
 enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
@@ -138,6 +141,15 @@ static inline uint64_t now_us() { return (uint64_t)esp_timer_get_time(); }
 
 static void show_boot_reboot();  // forward declaration
 static void nvs_save_wifi();     // forward declaration
+static void wifi_init();         // forward declaration
+static void wifi_stop();         // forward declaration
+
+static void eth_lost_cb(void *, esp_event_base_t, int32_t, void *) {
+    g_eth_lost = true;
+}
+static void eth_got_ip_cb(void *, esp_event_base_t, int32_t, void *) {
+    g_eth_got_ip = true;
+}
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 
@@ -711,8 +723,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
         s_wifi_joined = true;
     }
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        printf("WiFi: associated — waiting for DHCP\n");
+    }
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
+        printf("WiFi: disconnected, reason=%d\n", e->reason);
+        // Retry unless we deliberately stopped WiFi
+        if (g_wifi_enabled && !g_wifi_as_ap) esp_wifi_connect();
+    }
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         s_wifi_joined = true;
+        g_wifi_got_ip = true;
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         printf("WiFi IP: " IPSTR "\n", IP2STR(&e->ip_info.ip));
         http_server_start();
@@ -744,6 +766,7 @@ static void wifi_start_ap() {
     esp_wifi_set_mode(WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
     esp_wifi_start();
+    esp_wifi_set_max_tx_power(34);  // 8.5 dBm — reduce current spike on marginal supplies
 
     http_server_start();
 
@@ -762,10 +785,12 @@ static void wifi_start_sta() {
     wifi_config_t sta_cfg = {};
     strncpy((char *)sta_cfg.sta.ssid,     g_wifi_ssid, sizeof(sta_cfg.sta.ssid));
     strncpy((char *)sta_cfg.sta.password, g_wifi_pass, sizeof(sta_cfg.sta.password));
+    sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
     esp_wifi_start();
+    esp_wifi_set_max_tx_power(34);  // 8.5 dBm — reduce current spike on marginal supplies
     esp_wifi_connect();
 
     g_wifi_enabled  = true;
@@ -1173,7 +1198,11 @@ extern "C" void app_main(void) {
     }
     printf("\n");
 
-    wifi_init();
+    if (!ethConnected) wifi_init();
+
+    // Register after the boot wait so the initial IP event doesn't trigger switching
+    esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, eth_lost_cb,   nullptr);
+    esp_event_handler_register(IP_EVENT,  IP_EVENT_ETH_GOT_IP,         eth_got_ip_cb, nullptr);
 
     if (ethConnected) {
         printf("IP: %s\n", ethIPStr);
@@ -1205,6 +1234,31 @@ extern "C" void app_main(void) {
         handle_select();
         check_menu_timeout();
         check_wifi_timeout();
+        if (g_eth_lost) {
+            g_eth_lost = false;
+            printf("Ethernet lost — starting WiFi\n");
+            wifi_init();
+        }
+        if (g_wifi_got_ip) {
+            g_wifi_got_ip = false;
+            abl_link_enable(s_link, false);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            abl_link_enable(s_link, true);
+            linkEnabled = true;
+            printf("Link re-enabled on WiFi interface\n");
+        }
+        if (g_eth_got_ip) {
+            g_eth_got_ip = false;
+            if (g_wifi_enabled) {
+                printf("Ethernet back — stopping WiFi\n");
+                wifi_stop();
+            }
+            abl_link_enable(s_link, false);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            abl_link_enable(s_link, true);
+            linkEnabled = true;
+            printf("Link re-enabled on Ethernet interface\n");
+        }
         update_display();
         print_status();
         vTaskDelay(pdMS_TO_TICKS(1));
