@@ -536,6 +536,7 @@ static void show_ip_splash() {
 // ── WiFi & HTTP config server ──────────────────────────────────────────────────
 
 static bool           s_wifi_joined      = false;
+static bool           g_sta_failed       = false;
 static uint32_t       s_wifi_start_ms    = 0;
 static bool           g_wifi_initialized = false;
 static esp_netif_t   *s_ap_netif         = nullptr;
@@ -719,8 +720,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
         printf("WiFi: disconnected, reason=%d\n", e->reason);
-        // Retry unless we deliberately stopped WiFi
-        if (g_wifi_enabled && !g_wifi_as_ap) esp_wifi_connect();
+        if (g_wifi_enabled && !g_wifi_as_ap) {
+            if (s_wifi_joined) {
+                s_wifi_joined = false;  // next failure → AP
+                esp_wifi_connect();     // was connected — one retry
+            } else {
+                g_sta_failed = true;    // never connected or retry failed → AP
+            }
+        }
     }
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         s_wifi_joined = true;
@@ -808,13 +815,6 @@ static void wifi_init() {
     else                        wifi_start_sta();
 }
 
-static void check_wifi_timeout() {
-    if (!g_wifi_enabled || g_wifi_as_ap || s_wifi_joined) return;
-    if (now_ms() - s_wifi_start_ms < 60000) return;
-    printf("WiFi STA timeout — falling back to AP\n");
-    wifi_stop();
-    wifi_start_ap();
-}
 
 // ── Link helpers ───────────────────────────────────────────────────────────────
 
@@ -1222,7 +1222,12 @@ extern "C" void app_main(void) {
         handle_button();
         handle_select();
         check_menu_timeout();
-        check_wifi_timeout();
+        if (g_sta_failed) {
+            g_sta_failed = false;
+            printf("WiFi STA failed — falling back to AP\n");
+            wifi_stop();
+            wifi_start_ap();
+        }
         if (g_eth_lost) {
             g_eth_lost = false;
             printf("Ethernet lost — starting WiFi\n");
