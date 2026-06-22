@@ -150,6 +150,11 @@ static void eth_lost_cb(void *, esp_event_base_t, int32_t, void *) {
 static void eth_got_ip_cb(void *, esp_event_base_t, int32_t, void *) {
     g_eth_got_ip = true;
 }
+static void eth_connected_cb(void *, esp_event_base_t, int32_t, void *) {
+    // For static IP, ethernet_config.h sets ethConnected in this same event
+    // (its handler registered first). If true here, this is a static IP reconnect.
+    if (ethConnected) g_eth_got_ip = true;
+}
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 
@@ -1197,7 +1202,8 @@ extern "C" void app_main(void) {
     if (!ethConnected) wifi_init();
 
     // Register after the boot wait so the initial IP event doesn't trigger switching
-    esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, eth_lost_cb,   nullptr);
+    esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, eth_lost_cb,    nullptr);
+    esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_CONNECTED,   eth_connected_cb, nullptr);
     esp_event_handler_register(IP_EVENT,  IP_EVENT_ETH_GOT_IP,         eth_got_ip_cb, nullptr);
 
     if (ethConnected) {
