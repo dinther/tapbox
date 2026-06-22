@@ -70,7 +70,7 @@ Press the encoder knob to open the menu. Turn the knob to move between settings,
 
 Some settings (IP address, subnet, gateway) open a sub-menu with individual octets. Navigate and edit them the same way, then select **done** and press to return to the main menu.
 
-If you want to leave at any point without saving, just press the tap button or wait six seconds — tapbox will return to normal mode on its own.
+If you want to leave at any point without saving, just press the tap button or wait six seconds — tapbox will return to normal mode on its own. When you next open the menu, it will return to the last item you were on rather than starting at the top.
 
 ---
 
@@ -149,6 +149,42 @@ The factory defaults are **192.168.1.200** for the IP, **255.255.255.0** for the
 
 ---
 
+### UPd. — Firmware Update
+
+**What it does:** downloads the latest firmware from the internet and installs it automatically.
+
+When you select `UPd.` and press the encoder, tapbox connects to GitHub over Ethernet and downloads the latest release. The display shows a percentage as the download progresses. When it reaches 100, tapbox shows `donE` and reboots into the new firmware — the whole process takes around 30 seconds on a typical network connection.
+
+If something goes wrong (no network, server unreachable, download error) the display shows `Er` for a few seconds and then returns you to the menu without making any changes.
+
+**Requirements:** tapbox must be connected to the internet via Ethernet. The update uses HTTPS so there are no plain-text concerns on your local network.
+
+**After an update:** all your settings — tempo history, brightness, network configuration — are preserved. Only the firmware changes.
+
+*This item does nothing if the Ethernet cable is unplugged.*
+
+---
+
+### vEr — Firmware Version
+
+**What it does:** shows the firmware version currently running on your tapbox.
+
+The display shows the version number as `major.minor.patch` — for example, version 1.1.0 appears as `1.1.0`. This is read-only; pressing the encoder simply resets the menu timeout.
+
+---
+
+### bAt — Battery Level
+
+**What it does:** shows the estimated state of charge of the connected battery as a percentage from 0 to 100.
+
+This item is only meaningful if your tapbox has a battery connected via the optional voltage divider on IO4. If no voltage divider is fitted the reading will be unreliable and can be ignored.
+
+The reading updates smoothly and is filtered to avoid jitter, so it changes gradually rather than jumping between values. It is a guide rather than a precision instrument — expect accuracy of roughly ±10%.
+
+*This item is read-only. Requires the IO4 voltage divider hardware.*
+
+---
+
 ### rSEt — Factory Reset
 
 **What it does:** returns all settings to their original defaults and clears any network configuration.
@@ -192,6 +228,8 @@ Send your messages to the IP address shown on the display at boot.
 **Brightness at gigs:** a useful habit is to set the brightness at soundcheck under the actual stage lighting conditions, then save it. What looks comfortable in daylight may be too bright or too dim under stage wash.
 
 **Using a static IP with OSC:** if you use tapbox regularly in the same studio or live rig, setting a static IP once means your OSC routing just works every time. Five minutes of setup saves you checking the IP address at every session.
+
+**Keeping firmware up to date:** when a new release is available, navigate to `UPd.` in the menu and press the encoder while tapbox is connected to the internet. The update is automatic and takes about 30 seconds. Your settings are not affected.
 
 ---
 

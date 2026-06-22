@@ -14,6 +14,8 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 - **Menu system** — on-device configuration with NVS persistence across power cycles
 - **Static or DHCP** — configure IP address, subnet, and gateway via menu sub-menus
 - **IP splash on boot** — displays assigned IP address across two screens at startup
+- **Battery level** — optional SoC readout via voltage divider on IO4
+- **OTA updates** — pull and flash new firmware directly from the menu over Ethernet
 
 ## Hardware
 
@@ -27,13 +29,14 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 
 | GPIO | Function |
 |------|----------|
-| IO4  | Tap button (internal pull-up) |
+| IO12 | Tap button (internal pull-up) |
 | IO36 | Encoder A (encoder board pull-up) |
 | IO39 | Encoder B (encoder board pull-up) |
 | IO35 | Encoder switch (encoder board pull-up, input-only pin) |
 | IO14 | MAX7219 CLK |
 | IO2  | MAX7219 DIN |
 | IO15 | MAX7219 LOAD/CS |
+| IO4  | Battery ADC — midpoint of 100 kΩ / 100 kΩ voltage divider from battery+ to GND (optional) |
 
 > GPIO 0, 16, 18, 19, 21, 22, 23, 25, 26, 27 are used by the onboard Ethernet — do not reassign.
 
@@ -66,11 +69,15 @@ The tap button exits the menu immediately (and also performs a tap).
 | `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |
 | `Hub.` | Gateway | sub-menu: Oct1–Oct4, 0–255 each |
 | `rSEt` | Factory reset | confirm with second press |
+| `UPd.` | OTA firmware update | downloads firmware.bin from GitHub Pages and reboots |
+| `vEr ` | Firmware version | read-only; shows major.minor.patch |
+| `bAt ` | Battery level | read-only; shows 0–100 (requires IO4 voltage divider) |
+| `done` | Exit menu | returns to normal mode |
 
 `Acc.` controls both the encoder BPM step and the OSC nudge amount together.  
 `IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
 Static IP defaults: `192.168.1.200` / `255.255.255.0` / `192.168.1.1`.  
-Menu times out after 6 seconds of inactivity without saving.
+Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
 
 ## OSC Interface
 
