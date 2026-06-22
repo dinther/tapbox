@@ -72,7 +72,7 @@ jobs:
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git fetch origin master
           git checkout master
-          git rebase origin/master
           git add docs/manifest.json docs/bootloader.bin docs/partitions.bin docs/firmware.bin
           git diff --cached --quiet || git commit -m "Update web installer for ${{ github.ref_name }}"
+          git pull --rebase origin master
           git push origin master
