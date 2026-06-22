@@ -128,8 +128,8 @@ static uint32_t menuEnteredAt = 0;
 enum MenuIdx {
     MENU_SIG = 0, MENU_ACC, MENU_BRIT,
     MENU_NET, MENU_IP, MENU_SN, MENU_GT,
-    MENU_RESET, MENU_UPD, MENU_VER, MENU_BAT, MENU_WIFI, MENU_DONE,
-    MENU_COUNT  // 13
+    MENU_RESET, MENU_UPD, MENU_VER, MENU_BAT, MENU_DONE,
+    MENU_COUNT  // 12
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -291,7 +291,6 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_u, CH_P, CH_d | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // UPd.
     { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK                  },  // vEr  (CH_u renders as 'v')
     { CH_b, CH_A, CH_t, MAX7219Display::SEG_BLANK },  // bAt
-    { CH_A, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK },  // AP (WiFi config)
     { CH_d, CH_o, CH_n, CH_e                      },  // done
 };
 
@@ -373,15 +372,6 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             break;
         case MENU_BAT:
             render_int3(segs, read_battery_pct());
-            break;
-        case MENU_WIFI:
-            if (!g_wifi_enabled) {
-                segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
-            } else if (g_wifi_as_ap) {
-                segs[5] = CH_A; segs[6] = CH_P; segs[7] = MAX7219Display::SEG_BLANK;
-            } else {
-                segs[5] = MAX7219Display::SEG_BLANK; segs[6] = CH_o; segs[7] = CH_n;
-            }
             break;
         case MENU_DONE:
             break;
@@ -819,8 +809,11 @@ static void wifi_init() {
 }
 
 static void check_wifi_timeout() {
-    if (!g_wifi_enabled || s_wifi_joined) return;
-    if (now_ms() - s_wifi_start_ms >= 60000) wifi_stop();
+    if (!g_wifi_enabled || g_wifi_as_ap || s_wifi_joined) return;
+    if (now_ms() - s_wifi_start_ms < 60000) return;
+    printf("WiFi STA timeout — falling back to AP\n");
+    wifi_stop();
+    wifi_start_ap();
 }
 
 // ── Link helpers ───────────────────────────────────────────────────────────────
@@ -970,10 +963,6 @@ static void on_select_short_press() {
                 exit_menu();
             } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
                 menuEnteredAt = now;
-            } else if (menuItem == MENU_WIFI) {
-                exit_menu();
-                if (g_wifi_enabled) wifi_stop();
-                wifi_start_ap();
             } else if (menuItem == MENU_UPD) {
                 perform_ota();
             } else if (menuItem == MENU_RESET) {
