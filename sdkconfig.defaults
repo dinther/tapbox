@@ -20,6 +20,9 @@ CONFIG_FREERTOS_HZ=1000
 # Main task stack — Link needs headroom
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
+# OTA rollback — bootloader rolls back to previous slot if new firmware never marks itself valid
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # OTA over HTTPS — common CA bundle (covers DigiCert/GitHub Pages, saves ~150 KB vs full)
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
