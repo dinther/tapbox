@@ -128,8 +128,8 @@ static uint32_t menuEnteredAt = 0;
 enum MenuIdx {
     MENU_SIG = 0, MENU_ACC, MENU_BRIT,
     MENU_NET, MENU_IP, MENU_SN, MENU_GT,
-    MENU_RESET, MENU_UPD, MENU_VER, MENU_BAT, MENU_DONE,
-    MENU_COUNT  // 12
+    MENU_RESET, MENU_VER, MENU_BAT, MENU_DONE,
+    MENU_COUNT  // 11
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -288,7 +288,6 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
     { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
     { CH_r, CH_S, CH_e, CH_t                                          },  // rSet
-    { CH_u, CH_P, CH_d | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // UPd.
     { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK                  },  // vEr  (CH_u renders as 'v')
     { CH_b, CH_A, CH_t, MAX7219Display::SEG_BLANK },  // bAt
     { CH_d, CH_o, CH_n, CH_e                      },  // done
@@ -362,7 +361,7 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
         case MENU_IP: case MENU_SN: case MENU_GT:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
             break;
-        case MENU_RESET: case MENU_UPD:
+        case MENU_RESET:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
             break;
         case MENU_VER:
@@ -446,14 +445,18 @@ static void update_display() {
 
 // ── OTA update ────────────────────────────────────────────────────────────────
 
+static const uint8_t kOtaLabel[4] = {
+    CH_u, CH_P, CH_d | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK  // UPd.
+};
+
 static void perform_ota() {
     uint8_t segs[8] = {};
-    memcpy(segs, kMenuLabels[MENU_UPD], 4);
+    memcpy(segs, kOtaLabel, 4);
     segs[4] = segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
     display.setSegments(segs);
 
     auto show_err = [&]() {
-        memcpy(segs, kMenuLabels[MENU_UPD], 4);
+        memcpy(segs, kOtaLabel, 4);
         segs[4] = segs[5] = MAX7219Display::SEG_BLANK;
         segs[6] = CH_e; segs[7] = CH_r;
         display.setSegments(segs);
@@ -481,7 +484,7 @@ static void perform_ota() {
     while ((err = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         if (total > 0) {
             int pct = esp_https_ota_get_image_len_read(h) * 100 / total;
-            memcpy(segs, kMenuLabels[MENU_UPD], 4);
+            memcpy(segs, kOtaLabel, 4);
             render_int3(segs, pct);
             display.setSegments(segs);
         }
@@ -489,7 +492,7 @@ static void perform_ota() {
 
     if (err == ESP_OK && esp_https_ota_is_complete_data_received(h) &&
         esp_https_ota_finish(h) == ESP_OK) {
-        memcpy(segs, kMenuLabels[MENU_UPD], 4);
+        memcpy(segs, kOtaLabel, 4);
         segs[4] = CH_d; segs[5] = CH_o; segs[6] = CH_n; segs[7] = CH_e;
         display.setSegments(segs);
         vTaskDelay(pdMS_TO_TICKS(2000));
@@ -963,8 +966,6 @@ static void on_select_short_press() {
                 exit_menu();
             } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
                 menuEnteredAt = now;
-            } else if (menuItem == MENU_UPD) {
-                perform_ota();
             } else if (menuItem == MENU_RESET) {
                 appMode       = MODE_MENU_CONFIRM;
                 menuEnteredAt = now;
@@ -1176,6 +1177,10 @@ extern "C" void app_main(void) {
     display.init();
     nvs_load_settings();
 
+    // Both buttons held at power-on → OTA update mode
+    bool ota_at_boot = (gpio_get_level((gpio_num_t)PIN_TAP_BUTTON) == 0 &&
+                        gpio_get_level((gpio_num_t)PIN_SELECT)      == 0);
+
     initEthernet(g_net, g_ip, g_sn, g_gt);
 
     printf("Waiting for Ethernet");
@@ -1186,6 +1191,11 @@ extern "C" void app_main(void) {
         fflush(stdout);
     }
     printf("\n");
+
+    if (ota_at_boot) {
+        perform_ota();  // shows UPd. + progress; reboots on success, shows Er on failure
+        ota_at_boot = false;
+    }
 
     if (!ethConnected) wifi_init();
 
