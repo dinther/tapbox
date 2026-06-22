@@ -465,8 +465,6 @@ static void perform_ota() {
         menuEnteredAt = now_ms();
     };
 
-    if (!ethConnected) { show_err(); return; }
-
     esp_http_client_config_t http_cfg = {};
     http_cfg.url               = OTA_URL;
     http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
@@ -1192,11 +1190,6 @@ extern "C" void app_main(void) {
     }
     printf("\n");
 
-    if (ota_at_boot) {
-        perform_ota();  // shows UPd. + progress; reboots on success, shows Er on failure
-        ota_at_boot = false;
-    }
-
     if (!ethConnected) wifi_init();
 
     // Register after the boot wait so the initial IP event doesn't trigger switching
@@ -1206,6 +1199,7 @@ extern "C" void app_main(void) {
     if (ethConnected) {
         printf("IP: %s\n", ethIPStr);
         show_ip_splash();
+        if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
     } else {
         printf("No Ethernet — running standalone\n");
     }
@@ -1250,6 +1244,7 @@ extern "C" void app_main(void) {
             abl_link_enable(s_link, true);
             linkEnabled = true;
             printf("Link re-enabled on WiFi interface\n");
+            if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
         }
         if (g_eth_got_ip) {
             g_eth_got_ip = false;
@@ -1262,6 +1257,7 @@ extern "C" void app_main(void) {
             abl_link_enable(s_link, true);
             linkEnabled = true;
             printf("Link re-enabled on Ethernet interface\n");
+            if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
         }
         update_display();
         print_status();
