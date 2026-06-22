@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include "esp_adc/adc_oneshot.h"
 #include "abl_link.h"
 #include "tap_tempo.h"
 #include "ethernet_config.h"
@@ -25,6 +26,7 @@
 #define PIN_DISP_CLK    GPIO_NUM_14
 #define PIN_DISP_DIN    GPIO_NUM_2
 #define PIN_DISP_LOAD   GPIO_NUM_15
+#define PIN_BATT_ADC    GPIO_NUM_4
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 #define DEBOUNCE_MS     5
@@ -81,8 +83,9 @@ static double g_bpmStep = 0.1;
 static int    g_nudgeUs = 20000;
 
 // ── Core globals ───────────────────────────────────────────────────────────────
-static TapTempo       tapTempo;
-static MAX7219Display display(PIN_DISP_CLK, PIN_DISP_DIN, PIN_DISP_LOAD);
+static TapTempo                  tapTempo;
+static MAX7219Display            display(PIN_DISP_CLK, PIN_DISP_DIN, PIN_DISP_LOAD);
+static adc_oneshot_unit_handle_t s_adc2 = nullptr;
 
 static abl_link               s_link;
 static abl_link_session_state s_session;
@@ -105,8 +108,8 @@ static uint32_t menuEnteredAt = 0;
 enum MenuIdx {
     MENU_SIG = 0, MENU_ACC, MENU_BRIT,
     MENU_NET, MENU_IP, MENU_SN, MENU_GT,
-    MENU_RESET, MENU_VER, MENU_DONE,
-    MENU_COUNT  // 10
+    MENU_RESET, MENU_VER, MENU_BAT, MENU_DONE,
+    MENU_COUNT  // 11
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -240,8 +243,29 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
     { CH_r, CH_S, CH_e, CH_t                      },  // rSet
     { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK },  // vEr  (CH_u renders as 'v')
+    { CH_b, CH_A, CH_t, MAX7219Display::SEG_BLANK },  // bAt
     { CH_d, CH_o, CH_n, CH_e                      },  // done
 };
+
+static int read_battery_pct() {
+    if (!s_adc2) return 0;
+    int raw = 0;
+    adc_oneshot_read(s_adc2, ADC_CHANNEL_0, &raw);
+    // 100k/100k divider halves the battery voltage at IO4
+    // ADC_ATTEN_DB_12 full scale ≈ 3100 mV at raw 4095
+    uint32_t batt_mv = (uint32_t)raw * 6200 / 4095;
+
+    static const uint32_t v[]   = {3000, 3400, 3600, 3700, 3800, 3900, 4000, 4100, 4200};
+    static const int      soc[] = {   0,   10,   20,   35,   50,   65,   80,   90,  100};
+
+    if (batt_mv <= v[0]) return 0;
+    if (batt_mv >= v[8]) return 100;
+    for (int i = 0; i < 8; i++) {
+        if (batt_mv < v[i + 1])
+            return soc[i] + (int)((batt_mv - v[i]) * (soc[i + 1] - soc[i]) / (v[i + 1] - v[i]));
+    }
+    return 100;
+}
 
 static void render_int3(uint8_t *segs, int val) {
     int h = val / 100, t = (val / 10) % 10, u = val % 10;
@@ -286,6 +310,9 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             segs[5] = MAX7219Display::digit(FW_MAJOR) | MAX7219Display::SEG_DP;
             segs[6] = MAX7219Display::digit(FW_MINOR) | MAX7219Display::SEG_DP;
             segs[7] = MAX7219Display::digit(FW_PATCH);
+            break;
+        case MENU_BAT:
+            render_int3(segs, read_battery_pct());
             break;
         case MENU_DONE:
             break;
@@ -518,7 +545,7 @@ static void handle_encoder() {
         } else if (appMode == MODE_MENU_NAV) {
             if (menuItem == MENU_DONE) {
                 exit_menu();
-            } else if (menuItem == MENU_VER) {
+            } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
                 menuEnteredAt = now;  // read-only — reset timeout only
             } else if (menuItem == MENU_RESET) {
                 appMode       = MODE_MENU_CONFIRM;
@@ -676,6 +703,17 @@ static void init_gpio() {
     gpio_config(&tap_cfg);
 }
 
+static void init_adc() {
+    adc_oneshot_unit_init_cfg_t unit_cfg = {};
+    unit_cfg.unit_id = ADC_UNIT_2;
+    adc_oneshot_new_unit(&unit_cfg, &s_adc2);
+
+    adc_oneshot_chan_cfg_t chan_cfg = {};
+    chan_cfg.atten    = ADC_ATTEN_DB_12;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    adc_oneshot_config_channel(s_adc2, ADC_CHANNEL_0, &chan_cfg);
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────────
 
 extern "C" void app_main(void) {
@@ -689,6 +727,7 @@ extern "C" void app_main(void) {
     esp_netif_init();
 
     init_gpio();
+    init_adc();
     display.init();
     nvs_load_settings();
 
