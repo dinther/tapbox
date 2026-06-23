@@ -14,7 +14,7 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
 - **Menu system** — on-device configuration with NVS persistence across power cycles
 - **Static or DHCP** — configure IP address, subnet, and gateway via menu
-- **IP ticker on boot** — scrolls connection type and IP address across the display at startup (`Eth`, `SSID`, or `AP`)
+- **IP ticker on boot** — non-blocking scroll of connection type and IP address at startup (`Eth`, `SSID`, or `AP`); device is fully operational during the scroll
 - **Battery level** — optional SoC readout via voltage divider on IO36
 - **OTA updates** — hold both buttons at power-on to flash latest firmware over Ethernet or WiFi
 

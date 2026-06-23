@@ -128,7 +128,7 @@ Three options: **50 ms**, **20 ms**, **5 ms**.
 
 50 ms is best for live performance where you need to push or pull the phase decisively. 5 ms is for studio work where you need surgical phase correction. 20 ms is a good everyday value.
 
-*Default: Std*
+*Default: 20 ms*
 
 ---
 
@@ -254,7 +254,7 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 ## Troubleshooting
 
 **No IP address scrolls across the display at boot.**  
-tapbox could not connect to Ethernet within 10 seconds. Check the cable. If no cable is connected, tapbox starts WiFi — the display will scroll the IP once a connection is established, or `AP 192.168.4.1` if it falls back to access point mode.
+tapbox could not connect to Ethernet within the boot timeout (3 seconds for static IP, 5 seconds for DHCP). Check the cable. If no cable is connected, tapbox starts WiFi — the display will scroll the IP once a connection is established, or `AP 192.168.4.1` if it falls back to access point mode.
 
 **tapbox shows dashes on the display after boot.**  
 It is connected to the network but has not received any Link peers yet. This is normal — the display fills in once another Link device joins the session.

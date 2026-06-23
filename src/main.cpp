@@ -66,7 +66,7 @@ static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 4
+#define FW_MINOR 5
 #define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
@@ -79,16 +79,16 @@ static const int    kNudgeCount   = 3;
 // ── Persistent settings ────────────────────────────────────────────────────────
 static int g_sigIdx   = 2;             // kSignatures[2] = 4/4
 static int g_nudgeIdx = 1;             // kNudgeMs[1] = 20 ms
-static int g_brit    = 7;              // brightness 1–15
-static int g_net     = 0;              // 0=DHCP, 1=static
-static int g_ip[4]   = {192, 168,   1, 200};
-static int g_sn[4]   = {255, 255, 255,   0};
-static int g_gt[4]   = {192, 168,   1,   1};
+static int g_brit     = 7;             // brightness 1–15
+static int g_net      = 0;             // 0=DHCP, 1=static
+static int g_ip[4]    = {192, 168,   1, 200};
+static int g_sn[4]    = {255, 255, 255,   0};
+static int g_gt[4]    = {192, 168,   1,   1};
 static char g_wifi_ssid[64] = {};
 static char g_wifi_pass[64] = {};
 
 // ── Runtime values derived from settings ──────────────────────────────────────
-static int    g_nudgeUs = 20000;
+static int g_nudgeUs = 20000;
 
 // ── Core globals ───────────────────────────────────────────────────────────────
 static TapTempo                  tapTempo;
@@ -100,28 +100,35 @@ static abl_link_session_state s_session;
 static bool   linkEnabled = false;
 static double linkQuantum = 4.0;
 
-static int      lastButton      = 1;
-static uint32_t lastDebounce    = 0;
-static uint32_t s_btnPressedAt  = 0;
-static bool     s_btnLongFired  = false;
-static uint32_t s_btnAutoIncrAt = 0;
+// ── Button state ───────────────────────────────────────────────────────────────
+struct BtnCtx {
+    int      last         = 1;
+    uint32_t last_db      = 0;
+    uint32_t pressed_at   = 0;
+    bool     long_fired   = false;
+    uint32_t auto_incr_at = 0;  // tap button only
+};
+static BtnCtx s_tap_ctx;
+static BtnCtx s_sel_ctx;
 
-static int      lastSelect      = 1;
-static uint32_t lastSelectDb    = 0;
-static uint32_t s_selPressedAt  = 0;
-static bool     s_selLongFired  = false;
+static bool g_wifi_enabled = false;
+static bool g_wifi_as_ap   = false;
+static bool g_wifi_got_ip  = false;
+static bool g_eth_got_ip   = false;
+static bool g_eth_lost     = false;
 
-static bool     g_wifi_enabled  = false;
-static bool     g_wifi_as_ap    = false;
-static bool     g_wifi_got_ip   = false;
-static bool     g_eth_got_ip    = false;  // Ethernet came back after being down
-static bool     g_eth_lost      = false;  // Ethernet link dropped
+// ── Non-blocking AP scroll (continuous, looping) ──────────────────────────────
+static uint8_t  s_ap_buf[32] = {};
+static int      s_ap_len     = 0;
+static int      s_ap_offset  = -7;
+static uint32_t s_ap_step_ms = 0;
 
-// Non-blocking AP scroll state — driven from the main loop display section.
-static uint8_t  s_ap_buf[32]   = {};
-static int      s_ap_len       = 0;
-static int      s_ap_offset    = -7;
-static uint32_t s_ap_step_ms   = 0;
+// ── Non-blocking one-shot scroll (boot/reconnect IP splash) ───────────────────
+static uint8_t  s_scroll_buf[48]  = {};
+static int      s_scroll_len      = 0;
+static int      s_scroll_offset   = -7;
+static uint32_t s_scroll_step_ms  = 0;
+static bool     s_scroll_active   = false;
 
 // ── Menu state ─────────────────────────────────────────────────────────────────
 enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
@@ -175,22 +182,26 @@ static void nvs_load_settings() {
         return;
     }
     int32_t v;
-    if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)  g_sigIdx = (int)v;
+    if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx   = (int)v;
     if (nvs_get_i32(h, "nud",  &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgeIdx = (int)v;
-    if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 1 && v <= 15)        g_brit   = (int)v;
-    if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net     = (int)v;
-    if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]   = (int)v;
-    if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]   = (int)v;
-    if (nvs_get_i32(h, "ip2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[2]   = (int)v;
-    if (nvs_get_i32(h, "ip3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[3]   = (int)v;
-    if (nvs_get_i32(h, "sn0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[0]   = (int)v;
-    if (nvs_get_i32(h, "sn1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[1]   = (int)v;
-    if (nvs_get_i32(h, "sn2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[2]   = (int)v;
-    if (nvs_get_i32(h, "sn3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[3]   = (int)v;
-    if (nvs_get_i32(h, "gt0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[0]   = (int)v;
-    if (nvs_get_i32(h, "gt1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[1]   = (int)v;
-    if (nvs_get_i32(h, "gt2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[2]   = (int)v;
-    if (nvs_get_i32(h, "gt3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[3]   = (int)v;
+    if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 1 && v <= 15)         g_brit     = (int)v;
+    if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net      = (int)v;
+    if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]    = (int)v;
+    if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]    = (int)v;
+    if (nvs_get_i32(h, "ip2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[2]    = (int)v;
+    if (nvs_get_i32(h, "ip3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[3]    = (int)v;
+    if (nvs_get_i32(h, "sn0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[0]    = (int)v;
+    if (nvs_get_i32(h, "sn1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[1]    = (int)v;
+    if (nvs_get_i32(h, "sn2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[2]    = (int)v;
+    if (nvs_get_i32(h, "sn3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_sn[3]    = (int)v;
+    if (nvs_get_i32(h, "gt0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[0]    = (int)v;
+    if (nvs_get_i32(h, "gt1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[1]    = (int)v;
+    if (nvs_get_i32(h, "gt2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[2]    = (int)v;
+    if (nvs_get_i32(h, "gt3",  &v) == ESP_OK && v >= 0 && v <= 255)        g_gt[3]    = (int)v;
+    // WiFi credentials loaded here — avoids a second NVS open in wifi_init()
+    size_t len;
+    len = sizeof(g_wifi_ssid); nvs_get_str(h, "wifi_ssid", g_wifi_ssid, &len);
+    len = sizeof(g_wifi_pass); nvs_get_str(h, "wifi_pass", g_wifi_pass, &len);
     nvs_close(h);
     apply_settings();
 }
@@ -273,10 +284,10 @@ static int menu_val_max(int item) {
 
 static void menu_commit(int item, int val) {
     switch (item) {
-        case MENU_SIG:  g_sigIdx = val; break;
+        case MENU_SIG:  g_sigIdx   = val; break;
         case MENU_ACC:  g_nudgeIdx = val; break;
-        case MENU_BRIT: g_brit   = val; break;
-        case MENU_NET:  g_net    = val; break;
+        case MENU_BRIT: g_brit     = val; break;
+        case MENU_NET:  g_net      = val; break;
     }
 }
 
@@ -289,16 +300,16 @@ static int *submenu_array() {
 // Digit segment bytes for use in static label arrays: 0=0x7E 1=0x30 2=0x6D 3=0x79 4=0x33
 static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_B, CH_e, CH_a, CH_t                                       },  // Beat
-    { MAX7219Display::SEG_BLANK, CH_n, CH_u, CH_d },  // nud
+    { MAX7219Display::SEG_BLANK, CH_n, CH_u, CH_d                  },  // nud
     { CH_L, CH_e, CH_d, MAX7219Display::SEG_BLANK                  },  // Led
     { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
     { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
     { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
     { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
-    { CH_r, CH_S, CH_e, CH_t                                          },  // rSet
+    { CH_r, CH_S, CH_e, CH_t                                       },  // rSet
     { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK                  },  // vEr  (CH_u renders as 'v')
-    { CH_b, CH_A, CH_t, MAX7219Display::SEG_BLANK },  // bAt
-    { CH_d, CH_o, CH_n, CH_e                      },  // done
+    { CH_b, CH_A, CH_t, MAX7219Display::SEG_BLANK                  },  // bAt
+    { CH_d, CH_o, CH_n, CH_e                                       },  // done
 };
 
 static int read_battery_pct() {
@@ -381,13 +392,27 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
 
 static void update_display() {
     static uint32_t lastUpdate = 0;
-    if (now_ms() - lastUpdate < DISPLAY_MS) return;
-    lastUpdate = now_ms();
+    uint32_t now = now_ms();
+    if (now - lastUpdate < DISPLAY_MS) return;
+    lastUpdate = now;
 
     uint8_t segs[8] = {};
 
+    // One-shot scroll (boot/reconnect IP splash) takes priority over all modes
+    if (s_scroll_active) {
+        if (now - s_scroll_step_ms >= 300) {
+            s_scroll_step_ms = now;
+            for (int d = 0; d < 8; d++) {
+                int idx = s_scroll_offset + d;
+                segs[d] = (idx >= 0 && idx < s_scroll_len) ? s_scroll_buf[idx] : MAX7219Display::SEG_BLANK;
+            }
+            display.setSegments(segs);
+            if (++s_scroll_offset > s_scroll_len) s_scroll_active = false;
+        }
+        return;
+    }
+
     if (appMode == MODE_NORMAL && g_wifi_as_ap) {
-        uint32_t now = now_ms();
         if (now - s_ap_step_ms >= 500) {
             s_ap_step_ms = now;
             for (int d = 0; d < 8; d++) {
@@ -442,7 +467,7 @@ static void update_display() {
             segs[2] = CH_t;
             segs[3] = MAX7219Display::digit(menuSubItem + 1);
             int  val   = (appMode == MODE_SUBMENU_EDIT) ? menuEditVal : submenu_array()[menuSubItem];
-            bool blank = (appMode == MODE_SUBMENU_EDIT) && ((now_ms() / 250) & 1);
+            bool blank = (appMode == MODE_SUBMENU_EDIT) && ((now / 250) & 1);
             if (!blank) render_int3(segs, val);
         }
         display.setSegments(segs);
@@ -453,7 +478,7 @@ static void update_display() {
     memcpy(segs, kMenuLabels[menuItem], 4);
 
     int  val   = (appMode == MODE_MENU_EDIT) ? menuEditVal : menu_get_val(menuItem);
-    bool blank = (appMode == MODE_MENU_EDIT) && ((now_ms() / 250) & 1);
+    bool blank = (appMode == MODE_MENU_EDIT) && ((now / 250) & 1);
     if (!blank) render_menu_value(segs, menuItem, val);
 
     display.setSegments(segs);
@@ -545,34 +570,23 @@ static uint8_t char_to_seg(char c) {
     }
 }
 
-// Scrolls "label ip" right-to-left across the 8-digit display, 500 ms per step.
-// Dots in ip become blank separator digits.
-static void show_scroll_splash(const char *label, const char *ip) {
-    uint8_t buf[48] = {};
-    int len = 0;
-    for (int i = 0; label[i] && len < 46; i++)
-        buf[len++] = char_to_seg(label[i]);
-    buf[len++] = MAX7219Display::SEG_BLANK;
-    for (int i = 0; ip[i] && len < 47; i++) {
-        if (ip[i] == '.') {
-            buf[len++] = MAX7219Display::SEG_BLANK;
-        } else {
-            buf[len++] = char_to_seg(ip[i]);
-        }
+// Queues a non-blocking one-shot scroll; driven from update_display() at 300 ms/step.
+static void start_scroll_splash(const char *label, const char *ip) {
+    s_scroll_len     = 0;
+    s_scroll_offset  = -7;
+    s_scroll_step_ms = 0;
+    for (int i = 0; label[i] && s_scroll_len < 46; i++)
+        s_scroll_buf[s_scroll_len++] = char_to_seg(label[i]);
+    s_scroll_buf[s_scroll_len++] = MAX7219Display::SEG_BLANK;
+    for (int i = 0; ip[i] && s_scroll_len < 47; i++) {
+        if (ip[i] == '.') s_scroll_buf[s_scroll_len++] = MAX7219Display::SEG_BLANK;
+        else               s_scroll_buf[s_scroll_len++] = char_to_seg(ip[i]);
     }
-    for (int offset = -7; offset <= len; offset++) {
-        uint8_t segs[8] = {};
-        for (int d = 0; d < 8; d++) {
-            int idx = offset + d;
-            segs[d] = (idx >= 0 && idx < len) ? buf[idx] : MAX7219Display::SEG_BLANK;
-        }
-        display.setSegments(segs);
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
+    s_scroll_active = true;
 }
 
 static void ap_scroll_init() {
-    s_ap_len = 0;
+    s_ap_len    = 0;
     s_ap_offset = -7;
     s_ap_step_ms = 0;
     const char *label = "AP";
@@ -591,7 +605,6 @@ static void ap_scroll_init() {
 static bool           s_wifi_joined      = false;
 static bool           g_sta_failed       = false;
 static char           g_wifi_ip_str[16]  = {};
-static uint32_t       s_wifi_start_ms    = 0;
 static bool           g_wifi_initialized = false;
 static esp_netif_t   *s_ap_netif         = nullptr;
 static esp_netif_t   *s_sta_netif        = nullptr;
@@ -769,9 +782,9 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
     if (!body) return ESP_FAIL;
 
     char tmp[64];
-    if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount) g_sigIdx = v; }
-    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 15)       g_brit   = v; }
-    if (form_field(body, "acc",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kNudgeCount) g_nudgeIdx = v; }
+    if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount)   g_sigIdx   = v; }
+    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 15)          g_brit     = v; }
+    if (form_field(body, "acc",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kNudgeCount)  g_nudgeIdx = v; }
     free(body);
 
     nvs_save_settings();
@@ -855,10 +868,9 @@ static void wifi_start_ap() {
 
     http_server_start();
 
-    g_wifi_enabled  = true;
-    g_wifi_as_ap    = true;
-    s_wifi_joined   = false;
-    s_wifi_start_ms = now_ms();
+    g_wifi_enabled = true;
+    g_wifi_as_ap   = true;
+    s_wifi_joined  = false;
     ap_scroll_init();
     printf("WiFi AP: tapbox (open) — config at 192.168.4.1\n");
 }
@@ -879,10 +891,9 @@ static void wifi_start_sta() {
     esp_wifi_set_max_tx_power(34);  // 8.5 dBm — reduce current spike on marginal supplies
     esp_wifi_connect();
 
-    g_wifi_enabled  = true;
-    g_wifi_as_ap    = false;
-    s_wifi_joined   = false;
-    s_wifi_start_ms = now_ms();
+    g_wifi_enabled = true;
+    g_wifi_as_ap   = false;
+    s_wifi_joined  = false;
     printf("WiFi STA: connecting to %s\n", g_wifi_ssid);
 }
 
@@ -892,14 +903,8 @@ static void wifi_stop() {
     printf("WiFi stopped\n");
 }
 
+// Credentials already loaded into g_wifi_ssid/g_wifi_pass by nvs_load_settings() at boot.
 static void wifi_init() {
-    nvs_handle_t h;
-    if (nvs_open("settings", NVS_READONLY, &h) == ESP_OK) {
-        size_t len;
-        len = sizeof(g_wifi_ssid); nvs_get_str(h, "wifi_ssid", g_wifi_ssid, &len);
-        len = sizeof(g_wifi_pass); nvs_get_str(h, "wifi_pass", g_wifi_pass, &len);
-        nvs_close(h);
-    }
     if (g_wifi_ssid[0] == '\0') wifi_start_ap();
     else                        wifi_start_sta();
 }
@@ -994,31 +999,47 @@ static void on_button_short_press() {
     }
 }
 
-static void handle_button() {
-    int      reading = gpio_get_level(PIN_TAP_BUTTON);
-    uint32_t now     = now_ms();
+// ── Button polling ─────────────────────────────────────────────────────────────
 
-    if (reading != lastButton && (now - lastDebounce) >= DEBOUNCE_MS) {
-        lastDebounce = now;
+// Returns true if button is currently held. Sets fell=true on press edge,
+// short_rise=true on release edge when no long-press fired.
+static bool btn_poll(BtnCtx &ctx, gpio_num_t pin, uint32_t now,
+                     bool &fell, bool &short_rise) {
+    int reading = gpio_get_level(pin);
+    fell = short_rise = false;
+    if (reading != ctx.last && (now - ctx.last_db) >= DEBOUNCE_MS) {
+        ctx.last_db = now;
         if (reading == 0) {
-            s_btnPressedAt  = now;
-            s_btnLongFired  = false;
-            s_btnAutoIncrAt = now;
-            if (appMode == MODE_NORMAL) do_tap();
+            ctx.pressed_at = now;
+            ctx.long_fired = false;
+            fell = true;
         } else {
-            if (!s_btnLongFired) on_button_short_press();
+            if (!ctx.long_fired) short_rise = true;
         }
     }
-    lastButton = reading;
+    ctx.last = reading;
+    return reading == 0;
+}
+
+static void handle_button() {
+    uint32_t now = now_ms();
+    bool fell, short_rise;
+    bool held = btn_poll(s_tap_ctx, PIN_TAP_BUTTON, now, fell, short_rise);
+
+    if (fell) {
+        s_tap_ctx.auto_incr_at = now;
+        if (appMode == MODE_NORMAL) do_tap();
+    }
+    if (short_rise) on_button_short_press();
 
     // Auto-increment while held in edit modes (starts at 500 ms, speeds up at 1500 ms)
     bool inEdit = (appMode == MODE_MENU_EDIT || appMode == MODE_SUBMENU_EDIT);
-    if (reading == 0 && inEdit) {
-        uint32_t held     = now - s_btnPressedAt;
-        uint32_t interval = (held < 1500) ? 200 : 50;
-        if (held >= 500 && (now - s_btnAutoIncrAt) >= interval) {
-            s_btnAutoIncrAt = now;
-            s_btnLongFired  = true;
+    if (held && inEdit) {
+        uint32_t held_ms  = now - s_tap_ctx.pressed_at;
+        uint32_t interval = (held_ms < 1500) ? 200 : 50;
+        if (held_ms >= 500 && (now - s_tap_ctx.auto_incr_at) >= interval) {
+            s_tap_ctx.auto_incr_at = now;
+            s_tap_ctx.long_fired   = true;
             if (appMode == MODE_MENU_EDIT) {
                 int lo = menu_val_min(menuItem), hi = menu_val_max(menuItem);
                 menuEditVal = lo + ((menuEditVal - lo + 1 + (hi - lo + 1)) % (hi - lo + 1));
@@ -1031,8 +1052,8 @@ static void handle_button() {
     }
 
     // Long press in normal mode only: enter menu
-    if (reading == 0 && !s_btnLongFired && (now - s_btnPressedAt) >= LONG_PRESS_MS) {
-        s_btnLongFired = true;
+    if (held && !s_tap_ctx.long_fired && (now - s_tap_ctx.pressed_at) >= LONG_PRESS_MS) {
+        s_tap_ctx.long_fired = true;
         if (appMode == MODE_NORMAL) {
             appMode       = MODE_MENU_NAV;
             menuEnteredAt = now;
@@ -1081,6 +1102,7 @@ static void on_select_short_press() {
             break;
         case MODE_SUBMENU_NAV:
             if (menuSubItem == 4) {
+                nvs_save_settings();  // batch save: all octets committed, write once
                 appMode       = MODE_MENU_NAV;
                 menuEnteredAt = now;
             } else {
@@ -1091,7 +1113,6 @@ static void on_select_short_press() {
             break;
         case MODE_SUBMENU_EDIT:
             submenu_array()[menuSubItem] = menuEditVal;
-            nvs_save_settings();
             appMode       = MODE_SUBMENU_NAV;
             menuEnteredAt = now;
             break;
@@ -1103,6 +1124,7 @@ static void on_select_long_press() {
     switch (appMode) {
         case MODE_SUBMENU_NAV:
         case MODE_SUBMENU_EDIT:
+            nvs_save_settings();  // save any confirmed octets before exiting
             appMode       = MODE_MENU_NAV;
             menuEnteredAt = now;
             break;
@@ -1116,31 +1138,27 @@ static void on_select_long_press() {
 }
 
 static void handle_select() {
-    int      reading = gpio_get_level(PIN_SELECT);
-    uint32_t now     = now_ms();
+    uint32_t now = now_ms();
+    bool fell, short_rise;
+    bool held = btn_poll(s_sel_ctx, PIN_SELECT, now, fell, short_rise);
+    (void)fell;
 
-    if (reading != lastSelect && (now - lastSelectDb) >= DEBOUNCE_MS) {
-        lastSelectDb = now;
-        if (reading == 0) {
-            s_selPressedAt = now;
-            s_selLongFired = false;
-        } else {
-            if (!s_selLongFired) on_select_short_press();
-        }
-    }
-    lastSelect = reading;
+    if (short_rise) on_select_short_press();
 
-    if (reading == 0 && !s_selLongFired && (now - s_selPressedAt) >= SELECT_LONG_MS) {
-        s_selLongFired = true;
+    if (held && !s_sel_ctx.long_fired && (now - s_sel_ctx.pressed_at) >= SELECT_LONG_MS) {
+        s_sel_ctx.long_fired = true;
         on_select_long_press();
     }
 }
 
 static void check_menu_timeout() {
     if (appMode == MODE_NORMAL) return;
-    if ((now_ms() - menuEnteredAt) < MENU_TIMEOUT_MS) return;
+    uint32_t now = now_ms();
+    if (now - menuEnteredAt < MENU_TIMEOUT_MS) return;
     if (appMode == MODE_MENU_EDIT && menuItem == MENU_BRIT)
         display.setIntensity(g_brit);
+    if (appMode == MODE_SUBMENU_NAV || appMode == MODE_SUBMENU_EDIT)
+        nvs_save_settings();  // save confirmed octets on timeout
     appMode = MODE_NORMAL;
 }
 
@@ -1213,8 +1231,9 @@ static void osc_task(void *) {
 
 static void print_status() {
     static uint32_t lastPrint = 0;
-    if (now_ms() - lastPrint < 2000) return;
-    lastPrint = now_ms();
+    uint32_t now = now_ms();
+    if (now - lastPrint < 2000) return;
+    lastPrint = now;
     if (!linkEnabled) { printf("Cold start — tap 4 times to go live\n"); return; }
     abl_link_capture_app_session_state(s_link, s_session);
     printf("Link: %.2f BPM  sig: %.0f  peers: %llu  eth: %s\n",
@@ -1262,7 +1281,7 @@ extern "C" void app_main(void) {
     init_gpio();
     init_adc();
     display.init();
-    nvs_load_settings();
+    nvs_load_settings();  // loads all settings including WiFi credentials
 
     // Both buttons held at power-on → OTA update mode
     bool ota_at_boot = (gpio_get_level((gpio_num_t)PIN_TAP_BUTTON) == 0 &&
@@ -1270,9 +1289,11 @@ extern "C" void app_main(void) {
 
     initEthernet(g_net, g_ip, g_sn, g_gt);
 
+    // Static IP only needs link-up (~2 s); DHCP needs IP assignment (~5 s).
+    uint32_t eth_timeout = (g_net == 1) ? 3000 : 5000;
     printf("Waiting for Ethernet");
     uint32_t start = now_ms();
-    while (!ethConnected && (now_ms() - start) < 10000) {
+    while (!ethConnected && (now_ms() - start) < eth_timeout) {
         vTaskDelay(pdMS_TO_TICKS(250));
         printf(".");
         fflush(stdout);
@@ -1282,9 +1303,9 @@ extern "C" void app_main(void) {
     if (!ethConnected) wifi_init();
 
     // Register after the boot wait so the initial IP event doesn't trigger switching
-    esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, eth_lost_cb,    nullptr);
-    esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_CONNECTED,   eth_connected_cb, nullptr);
-    esp_event_handler_register(IP_EVENT,  IP_EVENT_ETH_GOT_IP,         eth_got_ip_cb, nullptr);
+    esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, eth_lost_cb,     nullptr);
+    esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_CONNECTED,    eth_connected_cb, nullptr);
+    esp_event_handler_register(IP_EVENT,  IP_EVENT_ETH_GOT_IP,         eth_got_ip_cb,   nullptr);
 
     s_link    = abl_link_create(120.0);
     s_session = abl_link_create_session_state();
@@ -1299,8 +1320,8 @@ extern "C" void app_main(void) {
         abl_link_commit_app_session_state(s_link, s_session);
         printf("Link live at 120.0 BPM\n");
         http_server_start();
-        show_scroll_splash("Eth", ethIPStr);
         if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
+        else start_scroll_splash("Eth", ethIPStr);
     } else {
         printf("No Ethernet — waiting for WiFi\n");
     }
@@ -1329,13 +1350,13 @@ extern "C" void app_main(void) {
         }
         if (g_wifi_got_ip) {
             g_wifi_got_ip = false;
-            show_scroll_splash("SSID", g_wifi_ip_str);
             abl_link_enable(s_link, false);
             vTaskDelay(pdMS_TO_TICKS(100));
             abl_link_enable(s_link, true);
             linkEnabled = true;
             printf("Link re-enabled on WiFi interface\n");
             if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
+            else start_scroll_splash("SSID", g_wifi_ip_str);
         }
         if (g_eth_got_ip) {
             g_eth_got_ip = false;
@@ -1348,9 +1369,9 @@ extern "C" void app_main(void) {
             abl_link_enable(s_link, true);
             linkEnabled = true;
             http_server_start();
-            show_scroll_splash("Eth", ethIPStr);
             printf("Link re-enabled on Ethernet interface\n");
             if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
+            else start_scroll_splash("Eth", ethIPStr);
         }
         update_display();
         print_status();
