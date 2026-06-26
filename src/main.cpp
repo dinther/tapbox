@@ -67,7 +67,7 @@ static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 6
-#define FW_PATCH 5
+#define FW_PATCH 6
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -1227,11 +1227,11 @@ static void handle_system_buttons() {
     // Release handling runs regardless of appMode so state always gets cleaned up
     if (!both && s_bh_state != BH_IDLE) {
         if (s_bh_state == BH_OTA && appMode == MODE_MENU_NAV) {
-            appMode              = MODE_OTA_CONFIRM;
-            menuEnteredAt        = now;
-            s_tap_ctx.long_fired = true;  // prevent spurious short-press on release
-            s_sel_ctx.long_fired = true;
+            appMode       = MODE_OTA_CONFIRM;
+            menuEnteredAt = now;
         }
+        s_tap_ctx.long_fired = true;  // always suppress button release after a combo
+        s_sel_ctx.long_fired = true;
         s_bh_state = BH_IDLE;
         s_bh_since = 0;
         return;
