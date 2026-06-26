@@ -2,7 +2,9 @@
 
 An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.ableton.com/en/link/) session over Ethernet or WiFi. Built on the [WT32-ETH01](http://www.wireless-tag.com/portfolio/wt32-eth01/) module with a MAX7219 8-digit 7-segment display.
 
-<img width="994" height="768" alt="image" src="https://github.com/user-attachments/assets/c6e33068-3b57-4dc8-b9bd-07a2b8daecac" />
+<img width="50%" alt="image" src="https://github.com/user-attachments/assets/7fcc0947-bca3-4eb2-b496-423312c8f760" />
+
+
 
 
 ## Features
