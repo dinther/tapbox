@@ -284,6 +284,25 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 
 ---
 
+## CDJ Simulator (Development Tool)
+
+If you do not have a physical CDJ player available, `tools/cdj_sim_web.py` is a Python script that broadcasts genuine Pro DJ Link beat packets over UDP on port 50001. Run it on any computer on the same network as tapbox to test CDJ sync without real hardware.
+
+```bash
+python tools/cdj_sim_web.py [bpm] [player]
+```
+
+This opens a control page in your browser at **http://localhost:8080**. From there you can:
+
+- Set BPM with the slider, the ±1 / ±0.1 nudge buttons, or keyboard arrows
+- Select which player number (1–4) the simulator pretends to be
+- Stop and start the beat stream to test the two-second CDJ timeout behaviour on tapbox
+- Press **Downbeat** to force `beat 1` of the bar immediately — tapbox snaps its Ableton Link phase to match
+
+The simulator requires Python 3 and no external packages.
+
+---
+
 ## Troubleshooting
 
 **No IP address scrolls across the display at boot.**  

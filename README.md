@@ -151,6 +151,33 @@ Requires Chrome or Edge. Windows users may need the [CH340 driver](https://www.w
 
 Pre-built binaries are also available on the [Releases](https://github.com/dinther/tapbox/releases) page for manual flashing with esptool.
 
+## Tools
+
+Two Python scripts in `tools/` assist with development and testing. Both require Python 3 and no external packages.
+
+### CDJ Simulator (`tools/cdj_sim_web.py`)
+
+Broadcasts genuine Pro DJ Link 0x28 beat packets on UDP port 50001 — useful for testing CDJ sync without real hardware.
+
+```bash
+python tools/cdj_sim_web.py [bpm] [player]
+```
+
+Opens a browser-based control page at **http://localhost:8080** with:
+- Live BPM display with ±1 / ±0.1 nudge buttons and a slider
+- Beat-in-bar indicator (4 circles, beat 1 highlighted in amber)
+- Player selector (1–4)
+- Stop / Start toggle (tests the 2-second CDJ timeout on tapbox)
+- **Downbeat** button — sends `Bb=1` immediately, triggering a bar-phase snap on tapbox
+
+### Link Monitor (`tools/link_monitor.py`)
+
+Prints the current Ableton Link session tempo and peer count to the terminal, useful for verifying that tapbox is pushing the right BPM into the Link session.
+
+```bash
+python tools/link_monitor.py
+```
+
 ## Building
 
 Requires [PlatformIO](https://platformio.org/).

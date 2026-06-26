@@ -69,7 +69,7 @@ static constexpr uint8_t CH_J    = 0x38;  // segments B,C,D
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 7
-#define FW_PATCH 0
+#define FW_PATCH 1
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -1412,6 +1412,7 @@ static const uint8_t kCdjMagic[] = {
 
 struct CdjPlayer {
     double   bpm        = 0.0;
+    uint8_t  beatInBar  = 0;   // 1–4; 0 = not yet received
     uint32_t lastBeatMs = 0;
 };
 
@@ -1433,6 +1434,7 @@ static bool cdj_parse_beat(const uint8_t *buf, int len) {
     if (effectiveBpm < 20.0 || effectiveBpm > 400.0) return false;
 
     s_cdj_players[player].bpm        = effectiveBpm;
+    s_cdj_players[player].beatInBar  = buf[0x5c];
     s_cdj_players[player].lastBeatMs = now_ms();
     return true;
 }
@@ -1468,6 +1470,8 @@ static void cdj_task(void *) {
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     static uint8_t buf[256];
+    uint8_t prev_bb  = 0;
+    int     prev_best = 0;
 
     while (true) {
         int n = recv(sock, buf, sizeof(buf), 0);
@@ -1475,18 +1479,34 @@ static void cdj_task(void *) {
 
         if (!g_cdj || !linkEnabled) {
             g_cdj_active = false;
+            prev_bb   = 0;
+            prev_best = 0;
             continue;
         }
 
         int best = cdj_active_player();
         if (best > 0) {
-            g_cdj_active = true;
-            double bpm   = s_cdj_players[best].bpm;
+            g_cdj_active     = true;
+            double  bpm      = s_cdj_players[best].bpm;
+            uint8_t bb       = s_cdj_players[best].beatInBar;
+            uint64_t t       = now_us();
+
+            // Reset phase tracking when switching players
+            if (best != prev_best) { prev_bb = 0; prev_best = best; }
+
             abl_link_capture_app_session_state(s_link, cdj_sess);
-            abl_link_set_tempo(cdj_sess, bpm, now_us());
+            abl_link_set_tempo(cdj_sess, bpm, t);
+
+            // Snap Link bar to CDJ downbeat on the 4→1 transition
+            if (bb == 1 && prev_bb == 4)
+                abl_link_force_beat_at_time(cdj_sess, 0.0, t, linkQuantum);
+
             abl_link_commit_app_session_state(s_link, cdj_sess);
+            prev_bb = bb;
         } else {
             g_cdj_active = false;
+            prev_bb      = 0;
+            prev_best    = 0;
         }
     }
 }
