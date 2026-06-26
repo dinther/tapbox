@@ -9,27 +9,11 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  release:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Cache PlatformIO
-        uses: actions/cache@v4
-        with:
-          path: ~/.platformio
-          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
-
-      - name: Install PlatformIO
-        run: pip install platformio
-
-      - name: Build firmware
-        run: python -m platformio run
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -37,38 +21,6 @@ jobs:
           name: tapbox ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            .pio/build/wt32-eth01/bootloader.bin
-            .pio/build/wt32-eth01/partitions.bin
-            .pio/build/wt32-eth01/firmware.bin
-
-      - name: Update web installer and publish
-        run: |
-          TAG=${{ github.ref_name }}
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          git fetch origin master
-          git checkout master
-          cp .pio/build/wt32-eth01/bootloader.bin docs/
-          cp .pio/build/wt32-eth01/partitions.bin docs/
-          cp .pio/build/wt32-eth01/firmware.bin   docs/
-          cat > docs/manifest.json << EOF
-          {
-            "name": "tapbox",
-            "version": "${TAG#v}",
-            "new_install_prompt_erase": true,
-            "builds": [
-              {
-                "chipFamily": "ESP32",
-                "parts": [
-                  { "path": "bootloader.bin", "offset": 4096 },
-                  { "path": "partitions.bin", "offset": 32768 },
-                  { "path": "firmware.bin",   "offset": 65536 }
-                ]
-              }
-            ]
-          }
-          EOF
-          git add docs/manifest.json docs/bootloader.bin docs/partitions.bin docs/firmware.bin
-          git diff --cached --quiet || git commit -m "Update web installer for ${TAG}"
-          git push origin master
+            docs/bootloader.bin
+            docs/partitions.bin
+            docs/firmware.bin
