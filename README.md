@@ -12,13 +12,13 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 - **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
-- **WiFi** — connects to your WiFi network as a client; browser config page for credentials; auto-failover between Ethernet and WiFi
-- **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
-- **Menu system** — on-device configuration with NVS persistence across power cycles
+- **Ethernet or WiFi** — Connects to your network as a client; browser config page for credentials; auto-failover to Wifi if no Ethernet present.
 - **Static or DHCP** — configure IP address, subnet, and gateway via menu
 - **IP ticker on boot** — non-blocking scroll of connection type and IP address at startup (`Eth`, `SSID`, or `AP`); device is fully operational during the scroll
+- **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
+- **Menu system** — on-device configuration with NVS persistence across power cycles
 - **Battery level** — optional SoC readout via voltage divider on IO36
-- **OTA updates** — open the menu, hold both buttons 3 s, confirm with select; device reboots and flashes latest firmware automatically on next network connection
+- **OTA updates** — open the menu, hold both buttons 3 s, release and confirm with select; device reboots and flashes latest firmware automatically on next network connection
 - **Factory reset** — open the menu, hold both buttons 8 s, confirm with select; returns device to store-bought state
 
 ## Hardware
