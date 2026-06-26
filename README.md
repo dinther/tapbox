@@ -162,6 +162,7 @@ Broadcasts genuine Pro DJ Link 0x28 beat packets on UDP port 50001 — useful fo
 ```bash
 python tools/cdj_sim_web.py [bpm] [player]
 ```
+<img width="602" height="817" alt="{47560FA2-C87A-4E2B-8EA1-346BB672038C}" src="https://github.com/user-attachments/assets/3cfe453d-4515-4b64-8fa7-15b0ca07dc36" />
 
 Opens a browser-based control page at **http://localhost:8080** with:
 - Live BPM display with ±1 / ±0.1 nudge buttons and a slider
