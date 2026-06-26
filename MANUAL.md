@@ -36,7 +36,7 @@ tapbox has two buttons:
 
 **Tap button** — the main button. Tap it in time with your music to set the tempo. A single tap immediately defines the downbeat (first beat of the bar). Three more taps locks in the tempo. Pressing the tap button in the menu moves to the next item or increments a value — hold it to auto-increment.
 
-**Select button** — the confirm button. A short press enters the menu from normal mode, steps into an edit field, or confirms a value. Hold it for one second to go back or exit the menu.
+**Select button** — the confirm button. A short press enters the menu from normal mode, steps into an edit field, or confirms a value. Hold it for one second to go back or exit the menu. When the `rSEt SurE` prompt is showing (after the 8-second both-button hold), a short press of select confirms the factory reset.
 
 ---
 
@@ -171,12 +171,6 @@ Factory defaults: **192.168.1.200** / **255.255.255.0** / **192.168.1.1**.
 
 ---
 
-### rSEt — Factory Reset
-
-**What it does:** returns all settings to their original defaults, including clearing stored WiFi credentials.
-
-When you select `rSEt` and press select, the display shows `rSEt SurE`. Press select once more to confirm. tapbox resets accuracy to Std, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1, and clears any saved WiFi SSID and password.
-
 ---
 
 ### vEr — Firmware Version
@@ -201,13 +195,33 @@ Returns to normal mode immediately.
 
 ---
 
-## Firmware Update
+## System Functions
 
-To update the firmware, hold both the **tap button** and the **select button** while powering on. Keep holding them until you see activity on the display.
+Both system functions are activated by holding **both buttons at the same time** while tapbox is in normal operating mode (not inside the menu). You do not need to power-cycle the device.
 
-tapbox boots normally — the update runs as soon as it gets a network connection, whether that is Ethernet or WiFi. The display shows `UPd.` followed by a progress percentage. When it reaches 100 it shows `donE` and reboots automatically into the new firmware. If the connection fails or the server is unreachable, the display shows `Er` and tapbox continues to boot normally.
+---
 
-All settings are preserved across updates. Only the firmware changes.
+### OTA Firmware Update
+
+Hold both the **tap button** and the **select button** for **3 seconds**. The display shows `UPd.----`. Release both buttons.
+
+tapbox saves a pending-update flag to memory, erases OTA data if necessary to return to the factory slot, and reboots. On the next boot, as soon as it obtains a network connection (Ethernet or WiFi), it downloads and installs the latest firmware automatically. The display shows `UPd.` followed by a progress percentage. When the percentage reaches 100, it shows `donE` and reboots into the new firmware.
+
+If the download fails or the server is unreachable, the display shows `Er` and tapbox continues to boot normally. All settings are preserved across updates; only the firmware changes.
+
+To cancel before release: keep holding until 8 seconds (the display changes to `rSEt SurE`), then release and do nothing — the confirmation times out after 6 seconds and tapbox returns to normal without any update.
+
+---
+
+### Factory Reset
+
+Hold both the **tap button** and the **select button** for **8 seconds**. You will see `UPd.----` at 3 seconds and then `rSEt SurE` at 8 seconds. Release the buttons.
+
+Press **select** to confirm. tapbox resets all settings to factory defaults — accuracy to Std, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
+
+To cancel: press nothing (or press tap). The display returns to normal after 6 seconds without resetting anything.
+
+After a factory reset the device boots into the original firmware from the factory partition. This guarantees the device can always be returned to working condition regardless of what happened during a previous OTA update.
 
 ---
 
@@ -247,7 +261,7 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 
 **2.4 GHz only:** the ESP32 radio does not support 5 GHz WiFi. If your router broadcasts both bands under the same name, tapbox will find the 2.4 GHz one automatically. If it broadcasts them separately, enter the 2.4 GHz SSID.
 
-**Keeping firmware up to date:** hold both buttons while powering on. The update runs automatically as soon as tapbox gets a network connection — Ethernet or WiFi. Takes about 30 seconds. Settings are not affected.
+**Keeping firmware up to date:** hold both buttons for 3 seconds in normal mode and release. The update runs automatically on the next boot as soon as tapbox gets a network connection — Ethernet or WiFi. Takes about 30 seconds. Settings are not affected.
 
 ---
 
@@ -269,7 +283,7 @@ Check that you entered the SSID exactly as it appears on your phone — SSIDs ar
 Confirm the IP address on the display at next boot and update your OSC destination. If using a static IP, verify the address, subnet, and gateway are correct.
 
 **I set a static IP and now tapbox is unreachable.**  
-Use the factory reset (`rSEt` in the menu) to return to Auto DHCP. The display will show the assigned address at the next boot.
+Use the factory reset (hold both buttons 8 s in normal mode, then confirm with select) to return to Auto DHCP. The display will show the assigned address at the next boot.
 
 **The display is very dim after a restart.**
 tapbox detected a brownout (power dip) during the previous session and has automatically set brightness to level 1 to protect against a repeat. You can raise it in the menu under `Led` and save. If it keeps happening, check your power supply.

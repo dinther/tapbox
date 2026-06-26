@@ -67,7 +67,7 @@ static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 6
-#define FW_PATCH 0
+#define FW_PATCH 2
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -114,6 +114,10 @@ struct BtnCtx {
 static BtnCtx s_tap_ctx;
 static BtnCtx s_sel_ctx;
 
+enum BothHeldState { BH_IDLE, BH_HELD, BH_OTA, BH_RESET };
+static BothHeldState s_bh_state = BH_IDLE;
+static uint32_t      s_bh_since = 0;
+
 static bool g_wifi_enabled = false;
 static bool g_wifi_as_ap   = false;
 static bool g_wifi_got_ip  = false;
@@ -153,10 +157,11 @@ static int menuSubItem = 0;  // active octet (0–3) when in sub-menu
 static inline uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
 static inline uint64_t now_us() { return (uint64_t)esp_timer_get_time(); }
 
-static void show_boot_reboot();  // forward declaration
-static void nvs_save_wifi();     // forward declaration
-static void wifi_init();         // forward declaration
-static void wifi_stop();         // forward declaration
+static void show_boot_reboot();          // forward declaration
+static void nvs_save_wifi();             // forward declaration
+static void nvs_save_ota_pending(bool);  // forward declaration
+static void wifi_init();                 // forward declaration
+static void wifi_stop();                 // forward declaration
 
 static void eth_lost_cb(void *, esp_event_base_t, int32_t, void *) {
     g_eth_lost = true;
@@ -259,6 +264,7 @@ static void factory_reset() {
 // ── Menu value helpers ─────────────────────────────────────────────────────────
 
 static bool menu_item_visible(int item) {
+    if (item == MENU_RESET) return false;
     if (item == MENU_IP || item == MENU_SN || item == MENU_GT) return g_net == 1;
     return true;
 }
@@ -401,6 +407,8 @@ static void update_display() {
 
     uint8_t segs[8] = {};
 
+    if (s_bh_state == BH_OTA) return;  // hold UPd.---- preview while user still holding
+
     // One-shot scroll (boot/reconnect IP splash) takes priority over all modes
     if (s_scroll_active) {
         if (now - s_scroll_step_ms >= 300) {
@@ -509,17 +517,28 @@ static void perform_ota() {
         menuEnteredAt = now_ms();
     };
 
+    if (esp_ota_get_next_update_partition(NULL) == NULL) {
+        printf("OTA: no update partition found\n");
+        show_err(); return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));  // let DNS and routing settle after IP assignment
+
     esp_http_client_config_t http_cfg = {};
-    http_cfg.url               = OTA_URL;
-    http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    http_cfg.timeout_ms        = 30000;
-    http_cfg.keep_alive_enable = true;
+    http_cfg.url                   = OTA_URL;
+    http_cfg.crt_bundle_attach     = esp_crt_bundle_attach;
+    http_cfg.timeout_ms            = 30000;
+    http_cfg.max_redirection_count = 5;
 
     esp_https_ota_config_t ota_cfg = {};
     ota_cfg.http_config = &http_cfg;
 
     esp_https_ota_handle_t h = nullptr;
-    if (esp_https_ota_begin(&ota_cfg, &h) != ESP_OK) { show_err(); return; }
+    esp_err_t begin_err = esp_https_ota_begin(&ota_cfg, &h);
+    if (begin_err != ESP_OK) {
+        printf("OTA begin failed: %s (0x%x)\n", esp_err_to_name(begin_err), begin_err);
+        show_err(); return;
+    }
 
     int total = esp_https_ota_get_image_size(h);
     esp_err_t err;
@@ -540,9 +559,28 @@ static void perform_ota() {
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_restart();
     } else {
+        printf("OTA perform/finish failed: %s (0x%x)\n", esp_err_to_name(err), err);
         esp_https_ota_abort(h);
         show_err();
     }
+}
+
+// ── OTA pending trigger ────────────────────────────────────────────────────────
+
+static void trigger_ota_pending() {
+    uint8_t segs[8] = {};
+    memcpy(segs, kOtaLabel, 4);
+    segs[4] = segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
+    display.setSegments(segs);
+    nvs_save_ota_pending(true);
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (running && running->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY) {
+        const esp_partition_t *otadata = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, NULL);
+        if (otadata) esp_partition_erase_range(otadata, 0, otadata->size);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
 }
 
 // ── Boot reboot display ────────────────────────────────────────────────────────
@@ -618,6 +656,14 @@ static void nvs_save_wifi() {
     if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_str(h, "wifi_ssid", g_wifi_ssid);
     nvs_set_str(h, "wifi_pass", g_wifi_pass);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void nvs_save_ota_pending(bool pending) {
+    nvs_handle_t h;
+    if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_i32(h, "ota_pend", pending ? 1 : 0);
     nvs_commit(h);
     nvs_close(h);
 }
@@ -1027,6 +1073,8 @@ static void handle_button() {
     bool fell, short_rise;
     bool held = btn_poll(s_tap_ctx, PIN_TAP_BUTTON, now, fell, short_rise);
 
+    if (s_bh_state != BH_IDLE) return;
+
     if (fell) {
         s_tap_ctx.auto_incr_at = now;
         if (appMode == MODE_NORMAL) do_tap();
@@ -1074,9 +1122,6 @@ static void on_select_short_press() {
             if (menuItem == MENU_DONE) {
                 exit_menu();
             } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
-                menuEnteredAt = now;
-            } else if (menuItem == MENU_RESET) {
-                appMode       = MODE_MENU_CONFIRM;
                 menuEnteredAt = now;
             } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
                 menuSubItem   = 0;
@@ -1144,6 +1189,8 @@ static void handle_select() {
     bool held = btn_poll(s_sel_ctx, PIN_SELECT, now, fell, short_rise);
     (void)fell;
 
+    if (s_bh_state != BH_IDLE) return;
+
     if (short_rise) on_select_short_press();
 
     if (held && !s_sel_ctx.long_fired && (now - s_sel_ctx.pressed_at) >= SELECT_LONG_MS) {
@@ -1161,6 +1208,46 @@ static void check_menu_timeout() {
     if (appMode == MODE_SUBMENU_NAV || appMode == MODE_SUBMENU_EDIT)
         nvs_save_settings();  // save confirmed octets on timeout
     appMode = MODE_NORMAL;
+}
+
+// Both-button hold combo: 3 s → OTA pending + reboot; 8 s → factory reset confirm
+static void handle_system_buttons() {
+    uint32_t now = now_ms();
+    bool tap_held = (gpio_get_level(PIN_TAP_BUTTON) == 0);
+    bool sel_held = (gpio_get_level(PIN_SELECT) == 0);
+    bool both = tap_held && sel_held;
+
+    // Release handling runs regardless of appMode so state always gets cleaned up
+    if (!both && s_bh_state != BH_IDLE) {
+        if (s_bh_state == BH_OTA && appMode == MODE_NORMAL)
+            trigger_ota_pending();  // does not return (esp_restart)
+        s_bh_state = BH_IDLE;
+        s_bh_since = 0;
+        return;
+    }
+
+    if (appMode != MODE_NORMAL) return;
+
+    if (both) {
+        if (s_bh_since == 0) s_bh_since = now;
+        uint32_t ms = now - s_bh_since;
+
+        if (s_bh_state == BH_IDLE) s_bh_state = BH_HELD;
+
+        if (ms >= 8000 && s_bh_state == BH_OTA) {
+            s_bh_state           = BH_RESET;
+            appMode              = MODE_MENU_CONFIRM;
+            menuEnteredAt        = now;
+            s_tap_ctx.long_fired = true;  // prevent spurious short-press on release
+            s_sel_ctx.long_fired = true;
+        } else if (ms >= 3000 && s_bh_state == BH_HELD) {
+            s_bh_state = BH_OTA;
+            uint8_t segs[8] = {};
+            memcpy(segs, kOtaLabel, 4);
+            segs[4] = segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
+            display.setSegments(segs);
+        }
+    }
 }
 
 // ── OSC server ─────────────────────────────────────────────────────────────────
@@ -1290,9 +1377,17 @@ extern "C" void app_main(void) {
         printf("Brownout detected — brightness forced to level 1\n");
     }
 
-    // Both buttons held at power-on → OTA update mode
-    bool ota_at_boot = (gpio_get_level((gpio_num_t)PIN_TAP_BUTTON) == 0 &&
-                        gpio_get_level((gpio_num_t)PIN_SELECT)      == 0);
+    // Check for OTA pending flag (set by holding both buttons in normal mode)
+    bool ota_pending = false;
+    {
+        nvs_handle_t nvs_h;
+        if (nvs_open("settings", NVS_READONLY, &nvs_h) == ESP_OK) {
+            int32_t v = 0;
+            if (nvs_get_i32(nvs_h, "ota_pend", &v) == ESP_OK) ota_pending = (v == 1);
+            nvs_close(nvs_h);
+        }
+    }
+    if (ota_pending) nvs_save_ota_pending(false);  // clear flag immediately
 
     initEthernet(g_net, g_ip, g_sn, g_gt);
 
@@ -1327,7 +1422,7 @@ extern "C" void app_main(void) {
         abl_link_commit_app_session_state(s_link, s_session);
         printf("Link live at 120.0 BPM\n");
         http_server_start();
-        if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
+        if (ota_pending) { ota_pending = false; perform_ota(); }
         else start_scroll_splash("Eth", ethIPStr);
     } else {
         printf("No Ethernet — waiting for WiFi\n");
@@ -1341,6 +1436,7 @@ extern "C" void app_main(void) {
     printf("OSC listening on port %d\n", OSC_PORT);
 
     while (true) {
+        handle_system_buttons();
         handle_button();
         handle_select();
         check_menu_timeout();
@@ -1362,7 +1458,7 @@ extern "C" void app_main(void) {
             abl_link_enable(s_link, true);
             linkEnabled = true;
             printf("Link re-enabled on WiFi interface\n");
-            if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
+            if (ota_pending) { ota_pending = false; perform_ota(); }
             else start_scroll_splash("SSID", g_wifi_ip_str);
         }
         if (g_eth_got_ip) {
@@ -1377,7 +1473,7 @@ extern "C" void app_main(void) {
             linkEnabled = true;
             http_server_start();
             printf("Link re-enabled on Ethernet interface\n");
-            if (ota_at_boot) { ota_at_boot = false; perform_ota(); }
+            if (ota_pending) { ota_pending = false; perform_ota(); }
             else start_scroll_splash("Eth", ethIPStr);
         }
         update_display();
