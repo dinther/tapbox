@@ -134,11 +134,11 @@ Three options: **50 ms**, **20 ms**, **5 ms**.
 
 ### Led — Display Brightness
 
-**What it does:** adjusts how bright the display glows, from a dim 1 up to a full-intensity 15.
+**What it does:** adjusts how bright the display glows across four levels (1 – 4).
 
-The display gives you a live preview as you change the value. In a dark venue, turning it down to 3 or 4 keeps it readable without becoming distracting. In a brightly lit studio, 15 is easy to read from across the room.
+The display gives you a live preview as you change the value. In a dark venue, level 1 or 2 keeps it readable without becoming distracting. In a brightly lit studio, level 4 is easy to read from across the room.
 
-*Default: 7*
+*Default: 2*
 
 ---
 
@@ -175,7 +175,7 @@ Factory defaults: **192.168.1.200** / **255.255.255.0** / **192.168.1.1**.
 
 **What it does:** returns all settings to their original defaults, including clearing stored WiFi credentials.
 
-When you select `rSEt` and press select, the display shows `rSEt SurE`. Press select once more to confirm. tapbox resets accuracy to Std, brightness to 7, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1, and clears any saved WiFi SSID and password.
+When you select `rSEt` and press select, the display shows `rSEt SurE`. Press select once more to confirm. tapbox resets accuracy to Std, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1, and clears any saved WiFi SSID and password.
 
 ---
 
@@ -270,6 +270,9 @@ Confirm the IP address on the display at next boot and update your OSC destinati
 
 **I set a static IP and now tapbox is unreachable.**  
 Use the factory reset (`rSEt` in the menu) to return to Auto DHCP. The display will show the assigned address at the next boot.
+
+**The display is very dim after a restart.**
+tapbox detected a brownout (power dip) during the previous session and has automatically set brightness to level 1 to protect against a repeat. You can raise it in the menu under `Led` and save. If it keeps happening, check your power supply.
 
 **The tempo drifts slightly after many taps.**  
 tapbox calculates BPM as an average across all taps in the session. Small variations in tap timing do shift the average, though the effect becomes smaller with each additional tap. For a locked-in tempo, tap steadily for 8 or more beats, then stop and let Link hold the tempo.

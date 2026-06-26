@@ -66,7 +66,7 @@ static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 5
+#define FW_MINOR 6
 #define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
@@ -76,10 +76,13 @@ static const int    kSigCount     = 6;
 static const int    kNudgeMs[]    = { 50, 20, 5 };
 static const int    kNudgeCount   = 3;
 
+static const int    kBritLevels[] = { 1, 5, 10, 15 };  // user levels 1-4 → MAX7219 intensity
+static const int    kBritCount    = 4;
+
 // ── Persistent settings ────────────────────────────────────────────────────────
 static int g_sigIdx   = 2;             // kSignatures[2] = 4/4
 static int g_nudgeIdx = 1;             // kNudgeMs[1] = 20 ms
-static int g_brit     = 7;             // brightness 1–15
+static int g_brit     = 1;             // brightness level index 0–3 (→ kBritLevels)
 static int g_net      = 0;             // 0=DHCP, 1=static
 static int g_ip[4]    = {192, 168,   1, 200};
 static int g_sn[4]    = {255, 255, 255,   0};
@@ -172,7 +175,7 @@ static void eth_connected_cb(void *, esp_event_base_t, int32_t, void *) {
 static void apply_settings() {
     linkQuantum = kSignatures[g_sigIdx];
     g_nudgeUs   = kNudgeMs[g_nudgeIdx] * 1000;
-    display.setIntensity(g_brit);
+    display.setIntensity(kBritLevels[g_brit]);
 }
 
 static void nvs_load_settings() {
@@ -184,7 +187,7 @@ static void nvs_load_settings() {
     int32_t v;
     if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx   = (int)v;
     if (nvs_get_i32(h, "nud",  &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgeIdx = (int)v;
-    if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 1 && v <= 15)         g_brit     = (int)v;
+    if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 0 && v <= 3)          g_brit     = (int)v;
     if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net      = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]    = (int)v;
     if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]    = (int)v;
@@ -230,7 +233,7 @@ static void nvs_save_settings() {
 }
 
 static void factory_reset() {
-    g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 7;
+    g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 1;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
@@ -270,13 +273,13 @@ static int menu_get_val(int item) {
     }
 }
 
-static int menu_val_min(int item) { return (item == MENU_BRIT) ? 1 : 0; }
+static int menu_val_min(int item) { (void)item; return 0; }
 
 static int menu_val_max(int item) {
     switch (item) {
         case MENU_SIG:  return kSigCount - 1;
         case MENU_ACC:  return kNudgeCount - 1;
-        case MENU_BRIT: return 15;
+        case MENU_BRIT: return kBritCount - 1;
         case MENU_NET:  return 1;
         default: return 0;
     }
@@ -361,7 +364,7 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             render_int3(segs, kNudgeMs[val]);
             break;
         case MENU_BRIT:
-            render_int3(segs, val);
+            render_int3(segs, val + 1);  // show 1-4 (user level)
             break;
         case MENU_NET:
             // 4-char value fills positions 4-7, overriding the blank separator
@@ -711,8 +714,8 @@ static esp_err_t http_get_root(httpd_req_t *req) {
     }
     httpd_resp_sendstr_chunk(req, "</select>");
     snprintf(tmp, sizeof(tmp),
-        "<label>Brightness (1-15)</label>"
-        "<input name=brit type=number min=1 max=15 value=%d>", g_brit);
+        "<label>Brightness (1-4)</label>"
+        "<input name=brit type=number min=1 max=4 value=%d>", g_brit + 1);
     httpd_resp_sendstr_chunk(req, tmp);
     httpd_resp_sendstr_chunk(req, "<label>Nudge size</label><select name=acc>");
     for (int i = 0; i < kNudgeCount; i++) {
@@ -783,7 +786,7 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
 
     char tmp[64];
     if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount)   g_sigIdx   = v; }
-    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 15)          g_brit     = v; }
+    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp) - 1; if (v >= 0 && v <= 3)       g_brit     = v; }
     if (form_field(body, "acc",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kNudgeCount)  g_nudgeIdx = v; }
     free(body);
 
@@ -864,7 +867,6 @@ static void wifi_start_ap() {
     esp_wifi_set_mode(WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
     esp_wifi_start();
-    esp_wifi_set_max_tx_power(34);  // 8.5 dBm — reduce current spike on marginal supplies
 
     http_server_start();
 
@@ -888,7 +890,6 @@ static void wifi_start_sta() {
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
     esp_wifi_start();
-    esp_wifi_set_max_tx_power(34);  // 8.5 dBm — reduce current spike on marginal supplies
     esp_wifi_connect();
 
     g_wifi_enabled = true;
@@ -951,7 +952,7 @@ static void go_live(double bpm, uint32_t sessionStartMs) {
 
 static void exit_menu() {
     if (appMode == MODE_MENU_EDIT && menuItem == MENU_BRIT)
-        display.setIntensity(g_brit);
+        display.setIntensity(kBritLevels[g_brit]);
     appMode = MODE_NORMAL;
 }
 
@@ -983,7 +984,7 @@ static void on_button_short_press() {
         case MODE_MENU_EDIT: {
             int lo = menu_val_min(menuItem), hi = menu_val_max(menuItem);
             menuEditVal = lo + ((menuEditVal - lo + 1 + (hi - lo + 1)) % (hi - lo + 1));
-            if (menuItem == MENU_BRIT) display.setIntensity(menuEditVal);
+            if (menuItem == MENU_BRIT) display.setIntensity(kBritLevels[menuEditVal]);
             menuEnteredAt = now;
             break;
         }
@@ -1043,7 +1044,7 @@ static void handle_button() {
             if (appMode == MODE_MENU_EDIT) {
                 int lo = menu_val_min(menuItem), hi = menu_val_max(menuItem);
                 menuEditVal = lo + ((menuEditVal - lo + 1 + (hi - lo + 1)) % (hi - lo + 1));
-                if (menuItem == MENU_BRIT) display.setIntensity(menuEditVal);
+                if (menuItem == MENU_BRIT) display.setIntensity(kBritLevels[menuEditVal]);
             } else {
                 menuEditVal = (menuEditVal + 1) % 256;
             }
@@ -1156,7 +1157,7 @@ static void check_menu_timeout() {
     uint32_t now = now_ms();
     if (now - menuEnteredAt < MENU_TIMEOUT_MS) return;
     if (appMode == MODE_MENU_EDIT && menuItem == MENU_BRIT)
-        display.setIntensity(g_brit);
+        display.setIntensity(kBritLevels[g_brit]);
     if (appMode == MODE_SUBMENU_NAV || appMode == MODE_SUBMENU_EDIT)
         nvs_save_settings();  // save confirmed octets on timeout
     appMode = MODE_NORMAL;
@@ -1282,6 +1283,12 @@ extern "C" void app_main(void) {
     init_adc();
     display.init();
     nvs_load_settings();  // loads all settings including WiFi credentials
+
+    if (esp_reset_reason() == ESP_RST_BROWNOUT) {
+        g_brit = 0;
+        display.setIntensity(kBritLevels[0]);
+        printf("Brownout detected — brightness forced to level 1\n");
+    }
 
     // Both buttons held at power-on → OTA update mode
     bool ota_at_boot = (gpio_get_level((gpio_num_t)PIN_TAP_BUTTON) == 0 &&

@@ -70,7 +70,7 @@ Value flashes at 4 Hz in edit mode.
 |-------|---------|--------|
 | `Beat` | Time signature | 2, 3, 4, 5, 6, 7 |
 | `nud ` | OSC nudge size | 50 ms · 20 ms · 5 ms |
-| `Led ` | Display brightness | 1 – 15 (live preview) |
+| `Led ` | Display brightness | 1 – 4 (live preview) |
 | `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) |
 | `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
 | `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |
