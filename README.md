@@ -16,8 +16,8 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 - **Static or DHCP** — configure IP address, subnet, and gateway via menu
 - **IP ticker on boot** — non-blocking scroll of connection type and IP address at startup (`Eth`, `SSID`, or `AP`); device is fully operational during the scroll
 - **Battery level** — optional SoC readout via voltage divider on IO36
-- **OTA updates** — hold both buttons 3 s in normal mode; device reboots and flashes latest firmware automatically on next network connection
-- **Factory reset** — hold both buttons 8 s in normal mode, then confirm with select; returns device to store-bought state
+- **OTA updates** — open the menu, hold both buttons 3 s, confirm with select; device reboots and flashes latest firmware automatically on next network connection
+- **Factory reset** — open the menu, hold both buttons 8 s, confirm with select; returns device to store-bought state
 
 ## Hardware
 
@@ -88,15 +88,15 @@ Menu times out after 6 seconds of inactivity without saving. The menu resumes at
 
 ## System Functions
 
-Both system functions are triggered by holding **both buttons simultaneously** in normal mode (not in the menu).
+Both system functions are triggered from **within the menu** by holding both buttons simultaneously. Open the menu first (select short press or tap long press), then hold both buttons.
 
 ### OTA Firmware Update
 
-Hold both buttons for **3 seconds**. The display shows `UPd.----`. Release the buttons. tapbox saves an update flag, erases OTA data if needed, and reboots. On the next boot, as soon as it gets a network connection, it downloads and installs the latest firmware. The display shows `UPd.` with a progress percentage, then `donE` before rebooting into the new firmware.
+Open the menu, then hold both buttons for **3 seconds**. The display shows `UPd.----`. Release — the display shows `UPd SurE`. Press **select** to confirm. tapbox saves an update flag, erases OTA data if needed, and reboots. On the next boot, as soon as it gets a network connection, it downloads and installs the latest firmware. The display shows `UPd.` with a progress percentage, then `donE` before rebooting into the new firmware.
 
 ### Factory Reset
 
-Hold both buttons for **8 seconds**. The display changes from `UPd.----` to `rSEt SurE`. Release and press **select** to confirm. tapbox resets all settings and reboots. Press nothing (or wait 6 seconds) to cancel.
+Open the menu, then hold both buttons for **8 seconds**. The display shows `UPd.----` at 3 s then `rSEt SurE` at 8 s. Release and press **select** to confirm. tapbox resets all settings and reboots. Press **tap**, hold **select**, or wait 6 seconds to cancel.
 
 ## WiFi
 

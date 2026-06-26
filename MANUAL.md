@@ -197,13 +197,13 @@ Returns to normal mode immediately.
 
 ## System Functions
 
-Both system functions are activated by holding **both buttons at the same time** while tapbox is in normal operating mode (not inside the menu). You do not need to power-cycle the device.
+Both system functions are activated from **within the menu** by holding both buttons at the same time. Open the menu first (select short press, or tap held for 1 second), then hold both buttons. You do not need to power-cycle the device.
 
 ---
 
 ### OTA Firmware Update
 
-Hold both the **tap button** and the **select button** for **3 seconds**. The display shows `UPd.----`. Release both buttons — the display changes to `UPd SurE`.
+Open the menu, then hold both the **tap button** and the **select button** for **3 seconds**. The display shows `UPd.----`. Release both buttons — the display changes to `UPd SurE`.
 
 Press **select** to confirm. tapbox saves a pending-update flag to memory, erases OTA data if necessary to return to the factory slot, and reboots. On the next boot, as soon as it obtains a network connection (Ethernet or WiFi), it downloads and installs the latest firmware automatically. The display shows `UPd.` followed by a progress percentage. When the percentage reaches 100, it shows `donE` and reboots into the new firmware.
 
@@ -215,7 +215,7 @@ To cancel: press **tap**, hold **select** for 1 second, or wait 6 seconds — ta
 
 ### Factory Reset
 
-Hold both the **tap button** and the **select button** for **8 seconds**. You will see `UPd.----` at 3 seconds and then `rSEt SurE` at 8 seconds. Release the buttons.
+Open the menu, then hold both the **tap button** and the **select button** for **8 seconds**. You will see `UPd.----` at 3 seconds and then `rSEt SurE` at 8 seconds. Release the buttons.
 
 Press **select** to confirm. tapbox resets all settings to factory defaults — accuracy to Std, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
 
@@ -261,7 +261,7 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 
 **2.4 GHz only:** the ESP32 radio does not support 5 GHz WiFi. If your router broadcasts both bands under the same name, tapbox will find the 2.4 GHz one automatically. If it broadcasts them separately, enter the 2.4 GHz SSID.
 
-**Keeping firmware up to date:** hold both buttons for 3 seconds in normal mode and release. The update runs automatically on the next boot as soon as tapbox gets a network connection — Ethernet or WiFi. Takes about 30 seconds. Settings are not affected.
+**Keeping firmware up to date:** open the menu, hold both buttons for 3 seconds and release, then confirm with select. The update runs automatically on the next boot as soon as tapbox gets a network connection — Ethernet or WiFi. Takes about 30 seconds. Settings are not affected.
 
 ---
 
@@ -283,7 +283,7 @@ Check that you entered the SSID exactly as it appears on your phone — SSIDs ar
 Confirm the IP address on the display at next boot and update your OSC destination. If using a static IP, verify the address, subnet, and gateway are correct.
 
 **I set a static IP and now tapbox is unreachable.**  
-Use the factory reset (hold both buttons 8 s in normal mode, then confirm with select) to return to Auto DHCP. The display will show the assigned address at the next boot.
+Use the factory reset (open the menu, hold both buttons 8 s, then confirm with select) to return to Auto DHCP. The display will show the assigned address at the next boot.
 
 **The display is very dim after a restart.**
 tapbox detected a brownout (power dip) during the previous session and has automatically set brightness to level 1 to protect against a repeat. You can raise it in the menu under `Led` and save. If it keeps happening, check your power supply.
