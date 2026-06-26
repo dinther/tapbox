@@ -11,6 +11,7 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 
 - **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
+- **Pioneer CDJ sync** — passively listens for Pro DJ Link beat packets on the same network; bridges CDJ tempo directly into the Ableton Link session; `C` indicator on display when active
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
 - **Ethernet or WiFi** — Connects to your network as a client; browser config page for credentials; auto-failover to Wifi if no Ethernet present.
 - **Static or DHCP** — configure IP address, subnet, and gateway via menu
@@ -47,9 +48,10 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 
 **Normal mode:**
 ```
-[ BPM hundreds ][ BPM tens ][ BPM units . ][ BPM tenths ][ blank ][ beat ][ blank ][ peers ]
+[ BPM hundreds ][ BPM tens ][ BPM units . ][ BPM tenths ][ blank ][ beat ][ CDJ ][ peers ]
 ```
-Example: `120.0` at beat 3 of 4 with 2 peers → `·120.0 3 2`
+Example: `120.0` at beat 3 of 4 with 2 peers → `·120.0 3 2`  
+`CDJ` position shows `C` when tapbox is actively locked to a Pioneer CDJ, blank otherwise.
 
 **Menu mode:**
 ```
@@ -74,6 +76,7 @@ Value flashes at 4 Hz in edit mode.
 | `Beat` | Time signature | 2, 3, 4, 5, 6, 7 |
 | `nud ` | OSC nudge size | 50 ms · 20 ms · 5 ms |
 | `Led ` | Display brightness | 1 – 4 (live preview) |
+| `Cdj ` | Pioneer CDJ sync | `On` · `Off` |
 | `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) |
 | `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
 | `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |

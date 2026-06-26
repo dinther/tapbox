@@ -26,6 +26,7 @@ Reading left to right:
 
 - **120.0** — the current tempo in BPM, updated in real time when any device in the Link session adjusts it
 - **3** — which beat of the bar you are on right now (this advances with the music)
+- **C** — appears when tapbox is locked to a Pioneer CDJ via Pro DJ Link; blank when not active
 - **2** — how many other Link peers are connected to the session
 
 On startup, tapbox joins the existing Link session tempo if one is already running, otherwise it starts at 120 BPM. You can tap a new tempo whenever you are ready.
@@ -142,6 +143,22 @@ The display gives you a live preview as you change the value. In a dark venue, l
 
 ---
 
+### Cdj — Pioneer CDJ Sync
+
+**What it does:** enables or disables passive listening for Pioneer Pro DJ Link beat packets on the network.
+
+When **On**, tapbox listens on the same Ethernet switch as your CDJ players and reads their beat timing automatically. The current BPM from the active CDJ is fed directly into the Ableton Link session — all your Link peers follow the CDJ without any manual tapping required. A `C` indicator appears on the display between the beat counter and the peer count to confirm the lock is active.
+
+tapbox follows whichever CDJ has the lowest player number (1 → 2 → 3 → 4). If that player stops sending for more than two seconds — because it was stopped or disconnected — tapbox drops down to the next available player. If no CDJ is found on the network, tapbox falls back to tap-tempo as normal.
+
+While CDJ sync is active, the tap button does not affect the tempo — the CDJ is in control. Turn CDJ sync **Off** in this menu to regain manual tap-tempo control.
+
+> CDJ sync requires Ethernet. tapbox must be on the same wired network switch as the CDJ players. No software needs to be installed on the CDJs — tapbox listens passively and the CDJs do not know it is there.
+
+*Default: On*
+
+---
+
 ### Lan. — Network Mode
 
 **What it does:** switches the Ethernet interface between automatic (DHCP) and manual (static) IP addressing.
@@ -248,6 +265,8 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 ---
 
 ## Tips and Tricks
+
+**CDJ sync with Ableton Live:** plug tapbox into the same Ethernet switch as your CDJ players with CDJ sync turned On. The moment a CDJ starts playing, the `C` indicator lights up and every Ableton Live instance on the network locks to the CDJ tempo automatically — no tapping, no MIDI clock, no configuration on the CDJs.
 
 **Tapping in from scratch:** for the most accurate reading, tap along with a steady source — a click track, a drum loop, or a song in headphones. Four clean taps is all you need to go live.
 

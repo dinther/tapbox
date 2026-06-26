@@ -62,12 +62,14 @@ static constexpr uint8_t CH_r = 0x05;
 static constexpr uint8_t CH_S = 0x5B;
 static constexpr uint8_t CH_t = 0x0F;
 static constexpr uint8_t CH_u = 0x1C;
+static constexpr uint8_t CH_C    = 0x4E;  // segments A,D,E,F
 static constexpr uint8_t CH_F    = 0x47;  // segments A,E,F,G
+static constexpr uint8_t CH_J    = 0x38;  // segments B,C,D
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 6
-#define FW_PATCH 9
+#define FW_MINOR 7
+#define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -84,6 +86,7 @@ static int g_sigIdx   = 2;             // kSignatures[2] = 4/4
 static int g_nudgeIdx = 1;             // kNudgeMs[1] = 20 ms
 static int g_brit     = 1;             // brightness level index 0–3 (→ kBritLevels)
 static int g_net      = 0;             // 0=DHCP, 1=static
+static int g_cdj      = 1;             // 0=off, 1=on (CDJ Pro DJ Link sync)
 static int g_ip[4]    = {192, 168,   1, 200};
 static int g_sn[4]    = {255, 255, 255,   0};
 static int g_gt[4]    = {192, 168,   1,   1};
@@ -94,7 +97,7 @@ static char g_wifi_pass[64] = {};
 //    settings if NVS is erased on the boot following an OTA update. ────────────
 struct RtcSettings {
     uint32_t magic;
-    int sigIdx, nudgeIdx, brit, net;
+    int sigIdx, nudgeIdx, brit, net, cdj;
     int ip[4], sn[4], gt[4];
     char wifi_ssid[64], wifi_pass[64];
 };
@@ -129,6 +132,8 @@ enum BothHeldState { BH_IDLE, BH_HELD, BH_OTA, BH_RESET };
 static BothHeldState s_bh_state = BH_IDLE;
 static uint32_t      s_bh_since = 0;
 
+static volatile bool g_cdj_active = false;  // set by cdj_task; read by display + input
+
 static bool g_wifi_enabled = false;
 static bool g_wifi_as_ap   = false;
 static bool g_wifi_got_ip  = false;
@@ -155,10 +160,10 @@ static AppMode  appMode       = MODE_NORMAL;
 static uint32_t menuEnteredAt = 0;
 
 enum MenuIdx {
-    MENU_SIG = 0, MENU_ACC, MENU_BRIT,
+    MENU_SIG = 0, MENU_ACC, MENU_BRIT, MENU_CDJ,
     MENU_NET, MENU_IP, MENU_SN, MENU_GT,
     MENU_RESET, MENU_VER, MENU_BAT, MENU_DONE,
-    MENU_COUNT  // 11
+    MENU_COUNT  // 12
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -205,6 +210,7 @@ static void nvs_load_settings() {
     if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx   = (int)v;
     if (nvs_get_i32(h, "nud",  &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgeIdx = (int)v;
     if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 0 && v <= 3)          g_brit     = (int)v;
+    if (nvs_get_i32(h, "cdj",  &v) == ESP_OK && v >= 0 && v <= 1)          g_cdj      = (int)v;
     if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net      = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]    = (int)v;
     if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]    = (int)v;
@@ -232,6 +238,7 @@ static void nvs_save_settings() {
     nvs_set_i32(h, "sig",  (int32_t)g_sigIdx);
     nvs_set_i32(h, "nud",  (int32_t)g_nudgeIdx);
     nvs_set_i32(h, "brit", (int32_t)g_brit);
+    nvs_set_i32(h, "cdj",  (int32_t)g_cdj);
     nvs_set_i32(h, "net",  (int32_t)g_net);
     nvs_set_i32(h, "ip0",  (int32_t)g_ip[0]);
     nvs_set_i32(h, "ip1",  (int32_t)g_ip[1]);
@@ -250,7 +257,7 @@ static void nvs_save_settings() {
 }
 
 static void factory_reset() {
-    g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 1;
+    g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 1; g_cdj = 1;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
@@ -286,6 +293,7 @@ static int menu_get_val(int item) {
         case MENU_SIG:  return g_sigIdx;
         case MENU_ACC:  return g_nudgeIdx;
         case MENU_BRIT: return g_brit;
+        case MENU_CDJ:  return g_cdj;
         case MENU_NET:  return g_net;
         default: return 0;
     }
@@ -298,6 +306,7 @@ static int menu_val_max(int item) {
         case MENU_SIG:  return kSigCount - 1;
         case MENU_ACC:  return kNudgeCount - 1;
         case MENU_BRIT: return kBritCount - 1;
+        case MENU_CDJ:  return 1;
         case MENU_NET:  return 1;
         default: return 0;
     }
@@ -308,6 +317,7 @@ static void menu_commit(int item, int val) {
         case MENU_SIG:  g_sigIdx   = val; break;
         case MENU_ACC:  g_nudgeIdx = val; break;
         case MENU_BRIT: g_brit     = val; break;
+        case MENU_CDJ:  g_cdj      = val; break;
         case MENU_NET:  g_net      = val; break;
     }
 }
@@ -323,6 +333,7 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_B, CH_e, CH_a, CH_t                                       },  // Beat
     { CH_n, CH_u, CH_d, MAX7219Display::SEG_BLANK                  },  // nud
     { CH_L, CH_e, CH_d, MAX7219Display::SEG_BLANK                  },  // Led
+    { CH_C, CH_d, CH_J, MAX7219Display::SEG_BLANK                  },  // Cdj
     { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
     { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
     { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
@@ -383,6 +394,17 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             break;
         case MENU_BRIT:
             render_int3(segs, val + 1);  // show 1-4 (user level)
+            break;
+        case MENU_CDJ:
+            segs[5] = MAX7219Display::SEG_BLANK;
+            if (val == 0) {
+                segs[5] = MAX7219Display::digit(0);  // O
+                segs[6] = CH_F;
+                segs[7] = CH_F;
+            } else {
+                segs[6] = MAX7219Display::digit(0);  // O
+                segs[7] = CH_n;
+            }
             break;
         case MENU_NET:
             // 4-char value fills positions 4-7, overriding the blank separator
@@ -468,6 +490,7 @@ static void update_display() {
             segs[2] = MAX7219Display::digit(units) | MAX7219Display::SEG_DP;
             segs[3] = MAX7219Display::digit(tenths);
             segs[5] = MAX7219Display::digit((int)floor(phase) + 1);
+            if (g_cdj_active) segs[6] = CH_C;
             segs[7] = MAX7219Display::digit(peers > 9 ? 9 : peers);
         }
         display.setSegments(segs);
@@ -691,7 +714,7 @@ static void nvs_save_ota_pending(bool pending) {
 static void rtc_save_settings() {
     s_rtc.magic    = RTC_MAGIC;
     s_rtc.sigIdx   = g_sigIdx;   s_rtc.nudgeIdx = g_nudgeIdx;
-    s_rtc.brit     = g_brit;     s_rtc.net      = g_net;
+    s_rtc.brit     = g_brit;     s_rtc.cdj      = g_cdj;     s_rtc.net = g_net;
     for (int i = 0; i < 4; i++) { s_rtc.ip[i] = g_ip[i]; s_rtc.sn[i] = g_sn[i]; s_rtc.gt[i] = g_gt[i]; }
     strncpy(s_rtc.wifi_ssid, g_wifi_ssid, sizeof(s_rtc.wifi_ssid));
     strncpy(s_rtc.wifi_pass, g_wifi_pass, sizeof(s_rtc.wifi_pass));
@@ -707,6 +730,7 @@ static void rtc_restore_to_nvs_if_valid() {
     nvs_set_i32(h, "sig",       s_rtc.sigIdx);
     nvs_set_i32(h, "nud",       s_rtc.nudgeIdx);
     nvs_set_i32(h, "brit",      s_rtc.brit);
+    nvs_set_i32(h, "cdj",       s_rtc.cdj);
     nvs_set_i32(h, "net",       s_rtc.net);
     nvs_set_i32(h, "ip0",  s_rtc.ip[0]); nvs_set_i32(h, "ip1",  s_rtc.ip[1]);
     nvs_set_i32(h, "ip2",  s_rtc.ip[2]); nvs_set_i32(h, "ip3",  s_rtc.ip[3]);
@@ -1056,6 +1080,7 @@ static void exit_menu() {
 }
 
 static void do_tap() {
+    if (g_cdj && g_cdj_active) return;
     TapResult r = tapTempo.tap();
     if (r.wentLive) {
         go_live(tapTempo.bpm(), tapTempo.sessionStartMs());
@@ -1376,6 +1401,96 @@ static void osc_task(void *) {
     }
 }
 
+// ── CDJ Pro DJ Link listener (Tier 1: passive beat tracking) ──────────────────
+
+#define CDJ_PORT       50001
+#define CDJ_TIMEOUT_MS 2000
+
+static const uint8_t kCdjMagic[] = {
+    0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6d, 0x4a, 0x4f, 0x4c
+};
+
+struct CdjPlayer {
+    double   bpm        = 0.0;
+    uint32_t lastBeatMs = 0;
+};
+
+static CdjPlayer s_cdj_players[5];  // index 1–4; 0 unused
+
+static bool cdj_parse_beat(const uint8_t *buf, int len) {
+    if (len < 96) return false;
+    if (memcmp(buf, kCdjMagic, 10) != 0) return false;
+    if (buf[0x0a] != 0x28) return false;
+
+    int player = buf[0x21];
+    if (player < 1 || player > 4) return false;
+
+    uint16_t rawBpm   = ((uint16_t)buf[0x5a] << 8) | buf[0x5b];
+    uint32_t rawPitch = ((uint32_t)buf[0x54] << 24) | ((uint32_t)buf[0x55] << 16) |
+                        ((uint32_t)buf[0x56] <<  8) |  (uint32_t)buf[0x57];
+    double effectiveBpm = (rawBpm / 100.0) * ((double)rawPitch / 1048576.0);
+
+    if (effectiveBpm < 20.0 || effectiveBpm > 400.0) return false;
+
+    s_cdj_players[player].bpm        = effectiveBpm;
+    s_cdj_players[player].lastBeatMs = now_ms();
+    return true;
+}
+
+// Returns the lowest-numbered player that sent a beat packet within CDJ_TIMEOUT_MS.
+static int cdj_active_player() {
+    uint32_t now = now_ms();
+    for (int p = 1; p <= 4; p++) {
+        if (s_cdj_players[p].lastBeatMs > 0 &&
+            (now - s_cdj_players[p].lastBeatMs) < CDJ_TIMEOUT_MS)
+            return p;
+    }
+    return 0;
+}
+
+static void cdj_task(void *) {
+    abl_link_session_state cdj_sess = abl_link_create_session_state();
+
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) { vTaskDelete(nullptr); return; }
+
+    int yes = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+    struct sockaddr_in addr = {};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port        = htons(CDJ_PORT);
+    bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+
+    // 200 ms receive timeout so the loop can check g_cdj even without traffic
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    static uint8_t buf[256];
+
+    while (true) {
+        int n = recv(sock, buf, sizeof(buf), 0);
+        if (n > 0) cdj_parse_beat(buf, n);
+
+        if (!g_cdj || !linkEnabled) {
+            g_cdj_active = false;
+            continue;
+        }
+
+        int best = cdj_active_player();
+        if (best > 0) {
+            g_cdj_active = true;
+            double bpm   = s_cdj_players[best].bpm;
+            abl_link_capture_app_session_state(s_link, cdj_sess);
+            abl_link_set_tempo(cdj_sess, bpm, now_us());
+            abl_link_commit_app_session_state(s_link, cdj_sess);
+        } else {
+            g_cdj_active = false;
+        }
+    }
+}
+
 // ── Status ─────────────────────────────────────────────────────────────────────
 
 static void print_status() {
@@ -1385,10 +1500,12 @@ static void print_status() {
     lastPrint = now;
     if (!linkEnabled) { printf("Cold start — tap 4 times to go live\n"); return; }
     abl_link_capture_app_session_state(s_link, s_session);
-    printf("Link: %.2f BPM  sig: %.0f  peers: %llu  eth: %s\n",
+    printf("Link: %.2f BPM  sig: %.0f  peers: %llu  eth: %s  cdj: %s%s\n",
            abl_link_tempo(s_session), linkQuantum,
            (unsigned long long)abl_link_num_peers(s_link),
-           ethConnected ? ethIPStr : "disconnected");
+           ethConnected ? ethIPStr : "disconnected",
+           g_cdj ? "on" : "off",
+           (g_cdj && g_cdj_active) ? " (active)" : "");
 }
 
 // ── GPIO init ──────────────────────────────────────────────────────────────────
@@ -1496,6 +1613,8 @@ extern "C" void app_main(void) {
 
     xTaskCreate(osc_task, "osc", 4096, nullptr, 5, nullptr);
     printf("OSC listening on port %d\n", OSC_PORT);
+    xTaskCreate(cdj_task, "cdj", 4096, nullptr, 5, nullptr);
+    printf("CDJ listener on port %d (mode: %s)\n", CDJ_PORT, g_cdj ? "on" : "off");
 
     while (true) {
         handle_system_buttons();
