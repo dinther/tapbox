@@ -67,7 +67,7 @@ static constexpr uint8_t CH_F    = 0x47;  // segments A,E,F,G
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 6
-#define FW_PATCH 8
+#define FW_PATCH 9
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -89,6 +89,17 @@ static int g_sn[4]    = {255, 255, 255,   0};
 static int g_gt[4]    = {192, 168,   1,   1};
 static char g_wifi_ssid[64] = {};
 static char g_wifi_pass[64] = {};
+
+// ── RTC memory — survives esp_restart() but not power-on; used to restore
+//    settings if NVS is erased on the boot following an OTA update. ────────────
+struct RtcSettings {
+    uint32_t magic;
+    int sigIdx, nudgeIdx, brit, net;
+    int ip[4], sn[4], gt[4];
+    char wifi_ssid[64], wifi_pass[64];
+};
+static constexpr uint32_t RTC_MAGIC = 0xCAFEB00B;
+RTC_DATA_ATTR static RtcSettings s_rtc;
 
 // ── Runtime values derived from settings ──────────────────────────────────────
 static int g_nudgeUs = 20000;
@@ -160,6 +171,7 @@ static inline uint64_t now_us() { return (uint64_t)esp_timer_get_time(); }
 static void show_boot_reboot();          // forward declaration
 static void nvs_save_wifi();             // forward declaration
 static void nvs_save_ota_pending(bool);  // forward declaration
+static void rtc_save_settings();         // forward declaration
 static void wifi_init();                 // forward declaration
 static void wifi_stop();                 // forward declaration
 
@@ -564,6 +576,7 @@ static void perform_ota() {
         segs[4] = CH_d; segs[5] = CH_o; segs[6] = CH_n; segs[7] = CH_e;
         display.setSegments(segs);
         vTaskDelay(pdMS_TO_TICKS(2000));
+        rtc_save_settings();
         esp_restart();
     } else {
         printf("OTA perform/finish failed: %s (0x%x)\n", esp_err_to_name(err), err);
@@ -673,6 +686,39 @@ static void nvs_save_ota_pending(bool pending) {
     nvs_set_i32(h, "ota_pend", pending ? 1 : 0);
     nvs_commit(h);
     nvs_close(h);
+}
+
+static void rtc_save_settings() {
+    s_rtc.magic    = RTC_MAGIC;
+    s_rtc.sigIdx   = g_sigIdx;   s_rtc.nudgeIdx = g_nudgeIdx;
+    s_rtc.brit     = g_brit;     s_rtc.net      = g_net;
+    for (int i = 0; i < 4; i++) { s_rtc.ip[i] = g_ip[i]; s_rtc.sn[i] = g_sn[i]; s_rtc.gt[i] = g_gt[i]; }
+    strncpy(s_rtc.wifi_ssid, g_wifi_ssid, sizeof(s_rtc.wifi_ssid));
+    strncpy(s_rtc.wifi_pass, g_wifi_pass, sizeof(s_rtc.wifi_pass));
+}
+
+// If NVS was erased on the OTA reboot, write the pre-OTA settings back so
+// nvs_load_settings() finds them. Magic is cleared so this runs only once.
+static void rtc_restore_to_nvs_if_valid() {
+    if (s_rtc.magic != RTC_MAGIC) return;
+    s_rtc.magic = 0;
+    nvs_handle_t h;
+    if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_i32(h, "sig",       s_rtc.sigIdx);
+    nvs_set_i32(h, "nud",       s_rtc.nudgeIdx);
+    nvs_set_i32(h, "brit",      s_rtc.brit);
+    nvs_set_i32(h, "net",       s_rtc.net);
+    nvs_set_i32(h, "ip0",  s_rtc.ip[0]); nvs_set_i32(h, "ip1",  s_rtc.ip[1]);
+    nvs_set_i32(h, "ip2",  s_rtc.ip[2]); nvs_set_i32(h, "ip3",  s_rtc.ip[3]);
+    nvs_set_i32(h, "sn0",  s_rtc.sn[0]); nvs_set_i32(h, "sn1",  s_rtc.sn[1]);
+    nvs_set_i32(h, "sn2",  s_rtc.sn[2]); nvs_set_i32(h, "sn3",  s_rtc.sn[3]);
+    nvs_set_i32(h, "gt0",  s_rtc.gt[0]); nvs_set_i32(h, "gt1",  s_rtc.gt[1]);
+    nvs_set_i32(h, "gt2",  s_rtc.gt[2]); nvs_set_i32(h, "gt3",  s_rtc.gt[3]);
+    nvs_set_str(h, "wifi_ssid", s_rtc.wifi_ssid);
+    nvs_set_str(h, "wifi_pass", s_rtc.wifi_pass);
+    nvs_commit(h);
+    nvs_close(h);
+    printf("RTC: settings restored to NVS after OTA reboot\n");
 }
 
 static void url_decode(char *s) {
@@ -1377,6 +1423,7 @@ extern "C" void app_main(void) {
         nvs_flash_erase();
         nvs_flash_init();
     }
+    rtc_restore_to_nvs_if_valid();
 
     esp_event_loop_create_default();
     esp_netif_init();
