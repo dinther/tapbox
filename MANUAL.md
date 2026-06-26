@@ -36,7 +36,7 @@ tapbox has two buttons:
 
 **Tap button** — the main button. Tap it in time with your music to set the tempo. A single tap immediately defines the downbeat (first beat of the bar). Three more taps locks in the tempo. Pressing the tap button in the menu moves to the next item or increments a value — hold it to auto-increment.
 
-**Select button** — the confirm button. A short press enters the menu from normal mode, steps into an edit field, or confirms a value. Hold it for one second to go back or exit the menu. When the `rSEt SurE` prompt is showing (after the 8-second both-button hold), a short press of select confirms the factory reset.
+**Select button** — the confirm button. A short press enters the menu from normal mode, steps into an edit field, or confirms a value. Hold it for one second to go back or exit the menu. When `UPd SurE` or `rSEt SurE` is showing, a short press of select confirms the action; press tap or hold select for 1 second to cancel.
 
 ---
 
@@ -203,13 +203,13 @@ Both system functions are activated by holding **both buttons at the same time**
 
 ### OTA Firmware Update
 
-Hold both the **tap button** and the **select button** for **3 seconds**. The display shows `UPd.----`. Release both buttons.
+Hold both the **tap button** and the **select button** for **3 seconds**. The display shows `UPd.----`. Release both buttons — the display changes to `UPd SurE`.
 
-tapbox saves a pending-update flag to memory, erases OTA data if necessary to return to the factory slot, and reboots. On the next boot, as soon as it obtains a network connection (Ethernet or WiFi), it downloads and installs the latest firmware automatically. The display shows `UPd.` followed by a progress percentage. When the percentage reaches 100, it shows `donE` and reboots into the new firmware.
+Press **select** to confirm. tapbox saves a pending-update flag to memory, erases OTA data if necessary to return to the factory slot, and reboots. On the next boot, as soon as it obtains a network connection (Ethernet or WiFi), it downloads and installs the latest firmware automatically. The display shows `UPd.` followed by a progress percentage. When the percentage reaches 100, it shows `donE` and reboots into the new firmware.
 
 If the download fails or the server is unreachable, the display shows `Er` and tapbox continues to boot normally. All settings are preserved across updates; only the firmware changes.
 
-To cancel before release: keep holding until 8 seconds (the display changes to `rSEt SurE`), then release and do nothing — the confirmation times out after 6 seconds and tapbox returns to normal without any update.
+To cancel: press **tap**, hold **select** for 1 second, or wait 6 seconds — tapbox returns to normal without scheduling an update.
 
 ---
 
