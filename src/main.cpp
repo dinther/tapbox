@@ -67,7 +67,7 @@ static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 6
-#define FW_PATCH 2
+#define FW_PATCH 3
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -139,7 +139,7 @@ static bool     s_scroll_active   = false;
 
 // ── Menu state ─────────────────────────────────────────────────────────────────
 enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
-               MODE_SUBMENU_NAV, MODE_SUBMENU_EDIT };
+               MODE_OTA_CONFIRM, MODE_SUBMENU_NAV, MODE_SUBMENU_EDIT };
 static AppMode  appMode       = MODE_NORMAL;
 static uint32_t menuEnteredAt = 0;
 
@@ -464,6 +464,13 @@ static void update_display() {
 
     if (appMode == MODE_MENU_CONFIRM) {
         segs[0] = CH_r; segs[1] = CH_S; segs[2] = CH_e; segs[3] = CH_t;
+        segs[4] = CH_S; segs[5] = CH_u; segs[6] = CH_r; segs[7] = CH_e;
+        display.setSegments(segs);
+        return;
+    }
+
+    if (appMode == MODE_OTA_CONFIRM) {
+        segs[0] = CH_u; segs[1] = CH_P; segs[2] = CH_d; segs[3] = MAX7219Display::SEG_BLANK;
         segs[4] = CH_S; segs[5] = CH_u; segs[6] = CH_r; segs[7] = CH_e;
         display.setSegments(segs);
         return;
@@ -1042,6 +1049,10 @@ static void on_button_short_press() {
             menuEditVal   = (menuEditVal + 1) % 256;
             menuEnteredAt = now;
             break;
+        case MODE_OTA_CONFIRM:
+        case MODE_MENU_CONFIRM:
+            appMode = MODE_NORMAL;
+            break;
         default: break;
     }
 }
@@ -1143,6 +1154,9 @@ static void on_select_short_press() {
             menuEnteredAt = now;
             break;
         }
+        case MODE_OTA_CONFIRM:
+            trigger_ota_pending();  // does not return
+            break;
         case MODE_MENU_CONFIRM:
             factory_reset();  // does not return
             break;
@@ -1177,6 +1191,7 @@ static void on_select_long_press() {
         case MODE_MENU_NAV:
         case MODE_MENU_EDIT:
         case MODE_MENU_CONFIRM:
+        case MODE_OTA_CONFIRM:
             exit_menu();
             break;
         default: break;
@@ -1219,8 +1234,12 @@ static void handle_system_buttons() {
 
     // Release handling runs regardless of appMode so state always gets cleaned up
     if (!both && s_bh_state != BH_IDLE) {
-        if (s_bh_state == BH_OTA && appMode == MODE_NORMAL)
-            trigger_ota_pending();  // does not return (esp_restart)
+        if (s_bh_state == BH_OTA && appMode == MODE_NORMAL) {
+            appMode              = MODE_OTA_CONFIRM;
+            menuEnteredAt        = now;
+            s_tap_ctx.long_fired = true;  // prevent spurious short-press on release
+            s_sel_ctx.long_fired = true;
+        }
         s_bh_state = BH_IDLE;
         s_bh_since = 0;
         return;
