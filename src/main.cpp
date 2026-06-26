@@ -63,14 +63,11 @@ static constexpr uint8_t CH_S = 0x5B;
 static constexpr uint8_t CH_t = 0x0F;
 static constexpr uint8_t CH_u = 0x1C;
 static constexpr uint8_t CH_F    = 0x47;  // segments A,E,F,G
-static constexpr uint8_t CH_Wi_L = 0xBE;  // W left half: bcdef + DP
-static constexpr uint8_t CH_Wi_R = 0x36;  // W right half: bcef
-static constexpr uint8_t CH_wi   = 0x06;  // i in WiFi: ef
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 6
-#define FW_PATCH 7
+#define FW_PATCH 8
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -1477,7 +1474,7 @@ extern "C" void app_main(void) {
             linkEnabled = true;
             printf("Link re-enabled on WiFi interface\n");
             if (ota_pending) { ota_pending = false; perform_ota(); }
-            else { static const uint8_t kWiFi[] = { CH_Wi_L, CH_Wi_R, CH_F, CH_wi }; start_scroll_splash(kWiFi, 4, g_wifi_ip_str); }
+            else { static const uint8_t kSta[] = { CH_S, CH_t, CH_A }; start_scroll_splash(kSta, 3, g_wifi_ip_str); }
         }
         if (g_eth_got_ip) {
             g_eth_got_ip = false;
