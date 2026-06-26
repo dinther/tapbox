@@ -67,7 +67,7 @@ static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 6
-#define FW_PATCH 4
+#define FW_PATCH 5
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -1111,14 +1111,6 @@ static void handle_button() {
         }
     }
 
-    // Long press in normal mode only: enter menu
-    if (held && !s_tap_ctx.long_fired && (now - s_tap_ctx.pressed_at) >= LONG_PRESS_MS) {
-        s_tap_ctx.long_fired = true;
-        if (appMode == MODE_NORMAL) {
-            appMode       = MODE_MENU_NAV;
-            menuEnteredAt = now;
-        }
-    }
 }
 
 // Select button: confirm/enter on short press; back/exit on long press
@@ -1245,26 +1237,29 @@ static void handle_system_buttons() {
         return;
     }
 
-    if (appMode != MODE_MENU_NAV) return;
-
     if (both) {
         if (s_bh_since == 0) s_bh_since = now;
         uint32_t ms = now - s_bh_since;
 
+        // Always suppress individual button handlers when both are held
         if (s_bh_state == BH_IDLE) s_bh_state = BH_HELD;
 
-        if (ms >= 8000 && s_bh_state == BH_OTA) {
-            s_bh_state           = BH_RESET;
-            appMode              = MODE_MENU_CONFIRM;
-            menuEnteredAt        = now;
-            s_tap_ctx.long_fired = true;  // prevent spurious short-press on release
-            s_sel_ctx.long_fired = true;
-        } else if (ms >= 3000 && s_bh_state == BH_HELD) {
-            s_bh_state = BH_OTA;
-            uint8_t segs[8] = {};
-            memcpy(segs, kOtaLabel, 4);
-            segs[4] = segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
-            display.setSegments(segs);
+        // 3 s / 8 s actions only fire from the menu
+        if (appMode == MODE_MENU_NAV) {
+            menuEnteredAt = now;  // keep menu alive during hold (prevents 6 s timeout)
+            if (ms >= 8000 && s_bh_state == BH_OTA) {
+                s_bh_state           = BH_RESET;
+                appMode              = MODE_MENU_CONFIRM;
+                menuEnteredAt        = now;
+                s_tap_ctx.long_fired = true;  // prevent spurious short-press on release
+                s_sel_ctx.long_fired = true;
+            } else if (ms >= 3000 && s_bh_state == BH_HELD) {
+                s_bh_state = BH_OTA;
+                uint8_t segs[8] = {};
+                memcpy(segs, kOtaLabel, 4);
+                segs[4] = segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
+                display.setSegments(segs);
+            }
         }
     }
 }

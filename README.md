@@ -62,7 +62,7 @@ Value flashes at 4 Hz in edit mode.
 | Tap button (normal mode) | Tap tempo |
 | Tap button (menu nav) | Advance to next item |
 | Tap button held (menu edit) | Auto-increment value (5/sec after 500 ms, 20/sec after 1500 ms) |
-| Select button short press | Enter menu / confirm / advance |
+| Select button short press | Enter menu / confirm |
 | Select button long press (1 s) | Back / exit menu |
 
 ## Menu
@@ -88,7 +88,7 @@ Menu times out after 6 seconds of inactivity without saving. The menu resumes at
 
 ## System Functions
 
-Both system functions are triggered from **within the menu** by holding both buttons simultaneously. Open the menu first (select short press or tap long press), then hold both buttons.
+Both system functions are triggered from **within the menu** by holding both buttons simultaneously. Open the menu first (select short press), then hold both buttons.
 
 ### OTA Firmware Update
 
