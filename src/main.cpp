@@ -62,12 +62,15 @@ static constexpr uint8_t CH_r = 0x05;
 static constexpr uint8_t CH_S = 0x5B;
 static constexpr uint8_t CH_t = 0x0F;
 static constexpr uint8_t CH_u = 0x1C;
-static constexpr uint8_t CH_F = 0x47;  // segments A,E,F,G
+static constexpr uint8_t CH_F    = 0x47;  // segments A,E,F,G
+static constexpr uint8_t CH_Wi_L = 0xBE;  // W left half: bcdef + DP
+static constexpr uint8_t CH_Wi_R = 0x36;  // W right half: bcef
+static constexpr uint8_t CH_wi   = 0x06;  // i in WiFi: ef
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 6
-#define FW_PATCH 6
+#define FW_PATCH 7
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -309,7 +312,7 @@ static int *submenu_array() {
 // Digit segment bytes for use in static label arrays: 0=0x7E 1=0x30 2=0x6D 3=0x79 4=0x33
 static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_B, CH_e, CH_a, CH_t                                       },  // Beat
-    { MAX7219Display::SEG_BLANK, CH_n, CH_u, CH_d                  },  // nud
+    { CH_n, CH_u, CH_d, MAX7219Display::SEG_BLANK                  },  // nud
     { CH_L, CH_e, CH_d, MAX7219Display::SEG_BLANK                  },  // Led
     { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
     { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
@@ -619,12 +622,12 @@ static uint8_t char_to_seg(char c) {
 }
 
 // Queues a non-blocking one-shot scroll; driven from update_display() at 300 ms/step.
-static void start_scroll_splash(const char *label, const char *ip) {
+static void start_scroll_splash(const uint8_t *label_segs, int label_len, const char *ip) {
     s_scroll_len     = 0;
     s_scroll_offset  = -7;
     s_scroll_step_ms = 0;
-    for (int i = 0; label[i] && s_scroll_len < 46; i++)
-        s_scroll_buf[s_scroll_len++] = char_to_seg(label[i]);
+    for (int i = 0; i < label_len && s_scroll_len < 46; i++)
+        s_scroll_buf[s_scroll_len++] = label_segs[i];
     s_scroll_buf[s_scroll_len++] = MAX7219Display::SEG_BLANK;
     for (int i = 0; ip[i] && s_scroll_len < 47; i++) {
         if (ip[i] == '.') s_scroll_buf[s_scroll_len++] = MAX7219Display::SEG_BLANK;
@@ -1214,6 +1217,7 @@ static void check_menu_timeout() {
         display.setIntensity(kBritLevels[g_brit]);
     if (appMode == MODE_SUBMENU_NAV || appMode == MODE_SUBMENU_EDIT)
         nvs_save_settings();  // save confirmed octets on timeout
+    if (menuItem == MENU_DONE) menuItem = 0;
     appMode = MODE_NORMAL;
 }
 
@@ -1437,7 +1441,7 @@ extern "C" void app_main(void) {
         printf("Link live at 120.0 BPM\n");
         http_server_start();
         if (ota_pending) { ota_pending = false; perform_ota(); }
-        else start_scroll_splash("Eth", ethIPStr);
+        else { static const uint8_t kEth[] = { CH_e, CH_t, CH_h }; start_scroll_splash(kEth, 3, ethIPStr); }
     } else {
         printf("No Ethernet — waiting for WiFi\n");
     }
@@ -1473,7 +1477,7 @@ extern "C" void app_main(void) {
             linkEnabled = true;
             printf("Link re-enabled on WiFi interface\n");
             if (ota_pending) { ota_pending = false; perform_ota(); }
-            else start_scroll_splash("SSID", g_wifi_ip_str);
+            else { static const uint8_t kWiFi[] = { CH_Wi_L, CH_Wi_R, CH_F, CH_wi }; start_scroll_splash(kWiFi, 4, g_wifi_ip_str); }
         }
         if (g_eth_got_ip) {
             g_eth_got_ip = false;
@@ -1488,7 +1492,7 @@ extern "C" void app_main(void) {
             http_server_start();
             printf("Link re-enabled on Ethernet interface\n");
             if (ota_pending) { ota_pending = false; perform_ota(); }
-            else start_scroll_splash("Eth", ethIPStr);
+            else { static const uint8_t kEth[] = { CH_e, CH_t, CH_h }; start_scroll_splash(kEth, 3, ethIPStr); }
         }
         update_display();
         print_status();
