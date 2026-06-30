@@ -9,16 +9,17 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 
 ## Features
 
-- **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session
+- **Three sync modes** — **Manual** (tap tempo), **Audio** (microphone auto-detects BPM, you tap the downbeat), and **CDJ** (Pioneer Pro DJ Link). Chosen with the `node` menu item; the active mode is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio)
+- **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session (Manual mode)
+- **Audio beat detection** — an INMP441 I2S microphone listens to the room and tracks the tempo automatically; you tap the downbeat for phase. → [How beat detection works](BEAT_DETECTION.md)
+- **Pioneer CDJ sync** — passively listens for Pro DJ Link beat packets on the same network; bridges CDJ tempo directly into the Ableton Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
-- **Pioneer CDJ sync** — passively listens for Pro DJ Link beat packets on the same network; bridges CDJ tempo directly into the Ableton Link session; `C` indicator on display when active
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
 - **Ethernet or WiFi** — Connects to your network as a client; browser config page for credentials; auto-failover to Wifi if no Ethernet present.
 - **Static or DHCP** — configure IP address, subnet, and gateway via menu
 - **IP ticker on boot** — non-blocking scroll of connection type and IP address at startup (`Eth`, `SSID`, or `AP`); device is fully operational during the scroll
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
 - **Menu system** — on-device configuration with NVS persistence across power cycles
-- **Battery level** — optional SoC readout via voltage divider on IO36
 - **OTA updates** — open the menu, hold both buttons 3 s, release and confirm with select; device reboots and flashes latest firmware automatically on next network connection
 - **Factory reset** — open the menu, hold both buttons 8 s, confirm with select; returns device to store-bought state
 
@@ -29,29 +30,38 @@ An ESP32-based tap-tempo controller that joins an [Ableton Link](https://www.abl
 | MCU / Ethernet | WT32-ETH01 (ESP32 + LAN8720A) |
 | Display | MAX7219 8-digit 7-segment module |
 | Input | Two momentary push buttons (tap + select) |
+| Microphone | INMP441 I2S MEMS microphone (for Audio mode) |
 
 ### Pin Assignments
 
 | GPIO | Function |
 |------|----------|
-| IO12 | Tap button (internal pull-up) |
-| IO4  | Select button (internal pull-up) |
-| IO36 | Battery ADC — midpoint of 100 kΩ / 100 kΩ voltage divider from battery+ to GND (optional) |
+| IO35 | Tap button — input-only, needs **external 10 kΩ pull-up to 3.3 V** |
+| IO39 | Select button — input-only, needs **external 10 kΩ pull-up to 3.3 V** |
+| IO4  | INMP441 SCK (I2S bit clock) |
+| IO12 | INMP441 WS (I2S word select) |
+| IO36 | INMP441 SD (I2S data in) |
 | IO14 | MAX7219 CLK |
 | IO2  | MAX7219 DIN |
 | IO15 | MAX7219 LOAD/CS |
 
+INMP441 wiring: **VDD → 3.3 V**, **GND → GND**, **L/R → GND** (selects the left channel), plus SCK/WS/SD as above.
+
 > GPIO 0, 16, 18, 19, 21, 22, 23, 25, 26, 27 are used by the onboard Ethernet — do not reassign.  
-> GPIO 34–39 are input-only (no internal pull-up). IO36 and IO39 are safe for ADC1 use alongside WiFi.
+> GPIO 34–39 are input-only with **no internal pull-up** — the tap/select buttons on IO35/IO39 therefore require external pull-ups.  
+> IO12 is a flash-voltage strapping pin (used here for I2S WS); acceptable on the WT32-ETH01.  
+> Battery monitoring was removed — IO36 is now the microphone data line.
 
 ## Display Layout
 
 **Normal mode:**
 ```
-[ BPM hundreds ][ BPM tens ][ BPM units . ][ BPM tenths ][ blank ][ beat ][ CDJ ][ peers ]
+[ BPM hundreds ][ BPM tens ][ BPM units . ][ BPM tenths ][ mode bar ][ beat ][ lock ][ peers ]
 ```
-Example: `120.0` at beat 3 of 4 with 2 peers → `·120.0 3 2`  
-`CDJ` position shows `C` when tapbox is actively locked to a Pioneer CDJ, blank otherwise.
+Example: `120.0` at beat 3 of 4 with 2 peers → `·120.0 3 2`
+
+- **Mode bar** (position 5): a single horizontal segment shows the active sync mode — **top = CDJ**, **middle = Manual**, **bottom = Audio**.
+- **Lock** (position 7): shows `C` when locked to a Pioneer CDJ (CDJ mode), or `A` when the microphone has a stable BPM lock (Audio mode); blank otherwise.
 
 **Menu mode:**
 ```
@@ -76,16 +86,19 @@ Value flashes at 4 Hz in edit mode.
 | `Beat` | Time signature | 2, 3, 4, 5, 6, 7 |
 | `nud ` | OSC nudge size | 50 ms · 20 ms · 5 ms |
 | `Led ` | Display brightness | 1 – 4 (live preview) |
-| `Cdj ` | Pioneer CDJ sync | `On` · `Off` |
+| `node` | Sync mode | `Cdj` · `Aud` (audio) · `tAP` (manual) |
+| `uind` | Mic accept window | ± % around tapped tempo (Audio mode only) |
+| `SLEu` | Mic tempo slew | rate limit, 0.1 %/sec units (Audio mode only) |
+| `thr ` | Mic onset threshold | sensitivity to kicks (Audio mode only) |
+| `gAte` | Mic noise gate | absolute signal floor (Audio mode only) |
 | `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) |
 | `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
 | `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |
 | `Hub.` | Gateway | sub-menu: Oct1–Oct4, 0–255 each |
 | `vEr ` | Firmware version | read-only; shows major.minor.patch |
-| `bAt ` | Battery level | read-only; shows 0–100 (requires IO36 voltage divider) |
 | `done` | Exit menu | returns to normal mode |
 
-`nud` controls the OSC nudge amount.  
+`node` selects the sync mode. The four mic-tuning items (`uind`, `SLEu`, `thr`, `gAte`) are **only shown when mode is `Aud`** — they tune the audio beat detector (see [BEAT_DETECTION.md](BEAT_DETECTION.md)).  
 `IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
 Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
 
@@ -126,7 +139,7 @@ The config page at `http://<tapbox-ip>` is accessible from any browser over Ethe
 | Section | Fields | Button | Effect |
 |---------|--------|--------|--------|
 | Network | WiFi SSID/password, Ethernet mode, static IP/subnet/gateway | Save Network — tapbox will reboot | Saves and reboots |
-| Display | Time signature, brightness, accuracy | Save Display Settings | Saves and applies live — no reboot |
+| Display | Time signature, sync mode, brightness, nudge size | Save Display Settings | Saves and applies live — no reboot |
 
 ## OSC Interface
 

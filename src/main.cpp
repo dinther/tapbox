@@ -11,7 +11,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
-#include "esp_adc/adc_oneshot.h"
+#include "driver/i2s_std.h"
 #include "esp_https_ota.h"
 #include "esp_crt_bundle.h"
 #include "esp_ota_ops.h"
@@ -25,12 +25,15 @@
 #include "esp_http_server.h"
 
 // ── Pin assignments ────────────────────────────────────────────────────────────
-#define PIN_TAP_BUTTON  GPIO_NUM_12
-#define PIN_SELECT      GPIO_NUM_4
+#define PIN_TAP_BUTTON  GPIO_NUM_35  // input-only — needs external 10k pullup to 3V3
+#define PIN_SELECT      GPIO_NUM_39  // input-only — needs external 10k pullup to 3V3
 #define PIN_DISP_CLK    GPIO_NUM_14
 #define PIN_DISP_DIN    GPIO_NUM_2
 #define PIN_DISP_LOAD   GPIO_NUM_15
-#define PIN_BATT_ADC    GPIO_NUM_36  // ADC1_CH0
+#define PIN_I2S_BCLK    GPIO_NUM_4   // INMP441 SCK
+#define PIN_I2S_WS      GPIO_NUM_12  // INMP441 WS  (strapping pin; eFuse-locked on WT32-ETH01)
+#define PIN_I2S_DIN     GPIO_NUM_36  // INMP441 SD  (was battery ADC)
+#define MIC_SAMPLE_RATE 16000
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 #define DEBOUNCE_MS     5
@@ -66,6 +69,11 @@ static constexpr uint8_t CH_C    = 0x4E;  // segments A,D,E,F
 static constexpr uint8_t CH_F    = 0x47;  // segments A,E,F,G
 static constexpr uint8_t CH_J    = 0x38;  // segments B,C,D
 
+// Mode indicator bars (single horizontal segment, see project memory for encoding)
+static constexpr uint8_t BAR_TOP = 0x40;  // segment A  → CDJ mode
+static constexpr uint8_t BAR_MID = 0x01;  // segment G  → Manual mode
+static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
+
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 7
@@ -81,12 +89,23 @@ static const int    kNudgeCount   = 3;
 static const int    kBritLevels[] = { 1, 5, 10, 15 };  // user levels 1-4 → MAX7219 intensity
 static const int    kBritCount    = 4;
 
+// ── Sync mode (mutually exclusive) ──────────────────────────────────────────────
+enum SyncMode { MODE_CDJ = 0, MODE_AUDIO = 1, MODE_MANUAL = 2 };
+
 // ── Persistent settings ────────────────────────────────────────────────────────
 static int g_sigIdx   = 2;             // kSignatures[2] = 4/4
 static int g_nudgeIdx = 1;             // kNudgeMs[1] = 20 ms
 static int g_brit     = 1;             // brightness level index 0–3 (→ kBritLevels)
 static int g_net      = 0;             // 0=DHCP, 1=static
-static int g_cdj      = 1;             // 0=off, 1=on (CDJ Pro DJ Link sync)
+static int g_mode     = MODE_CDJ;      // 0=CDJ, 1=Audio (mic), 2=Manual
+// Mic / beat-detection tuning knobs (live-adjustable while tuning; folded into a
+// preset later). See [[project-inmp441-plan]].
+static int g_micWin   = 10;            // beat-accept window, % around tracked BPM — must
+                                       // stay wide enough to admit the quantization spread;
+                                       // accuracy comes from the multi-beat span, not this
+static int g_micSlew  = 10;            // tempo slew limit, units of 0.1%/sec (0–50)
+static int g_micThr   = 8;             // onset threshold: energy > baseline*(1+thr/10) (0–30)
+static int g_micGate  = 5;            // absolute noise-gate floor (0–50, ×1e-5 normalized)
 static int g_ip[4]    = {192, 168,   1, 200};
 static int g_sn[4]    = {255, 255, 255,   0};
 static int g_gt[4]    = {192, 168,   1,   1};
@@ -97,7 +116,8 @@ static char g_wifi_pass[64] = {};
 //    settings if NVS is erased on the boot following an OTA update. ────────────
 struct RtcSettings {
     uint32_t magic;
-    int sigIdx, nudgeIdx, brit, net, cdj;
+    int sigIdx, nudgeIdx, brit, net, mode;
+    int micWin, micSlew, micThr, micGate;
     int ip[4], sn[4], gt[4];
     char wifi_ssid[64], wifi_pass[64];
 };
@@ -110,7 +130,6 @@ static int g_nudgeUs = 20000;
 // ── Core globals ───────────────────────────────────────────────────────────────
 static TapTempo                  tapTempo;
 static MAX7219Display            display(PIN_DISP_CLK, PIN_DISP_DIN, PIN_DISP_LOAD);
-static adc_oneshot_unit_handle_t s_adc1 = nullptr;
 
 static abl_link               s_link;
 static abl_link_session_state s_session;
@@ -133,6 +152,14 @@ static BothHeldState s_bh_state = BH_IDLE;
 static uint32_t      s_bh_since = 0;
 
 static volatile bool g_cdj_active = false;  // set by cdj_task; read by display + input
+
+// ── Mic / beat-detection runtime state ──────────────────────────────────────────
+static i2s_chan_handle_t s_i2s_rx     = nullptr;
+static volatile double   g_mic_bpm    = 0.0;    // last raw detected BPM (display hint)
+static volatile bool     g_mic_locked = false;  // mic has a stable tracked BPM
+static volatile bool     g_mic_armed  = false;  // a tap has anchored the tracker
+static volatile double   g_mic_tracked = 0.0;   // adaptive anchor / applied BPM
+static volatile double   g_mic_tapAnchor = 0.0; // last tap-set tempo (clamp reference)
 
 static bool g_wifi_enabled = false;
 static bool g_wifi_as_ap   = false;
@@ -160,10 +187,11 @@ static AppMode  appMode       = MODE_NORMAL;
 static uint32_t menuEnteredAt = 0;
 
 enum MenuIdx {
-    MENU_SIG = 0, MENU_ACC, MENU_BRIT, MENU_CDJ,
+    MENU_SIG = 0, MENU_ACC, MENU_BRIT, MENU_MODE,
+    MENU_MWIN, MENU_MSLEW, MENU_MTHR, MENU_MGATE,
     MENU_NET, MENU_IP, MENU_SN, MENU_GT,
-    MENU_RESET, MENU_VER, MENU_BAT, MENU_DONE,
-    MENU_COUNT  // 12
+    MENU_RESET, MENU_VER, MENU_DONE,
+    MENU_COUNT  // 15
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -210,7 +238,11 @@ static void nvs_load_settings() {
     if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx   = (int)v;
     if (nvs_get_i32(h, "nud",  &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgeIdx = (int)v;
     if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 0 && v <= 3)          g_brit     = (int)v;
-    if (nvs_get_i32(h, "cdj",  &v) == ESP_OK && v >= 0 && v <= 1)          g_cdj      = (int)v;
+    if (nvs_get_i32(h, "mode", &v) == ESP_OK && v >= 0 && v <= 2)          g_mode     = (int)v;
+    if (nvs_get_i32(h, "mwin", &v) == ESP_OK && v >= 0 && v <= 30)         g_micWin   = (int)v;
+    if (nvs_get_i32(h, "mslew",&v) == ESP_OK && v >= 0 && v <= 50)         g_micSlew  = (int)v;
+    if (nvs_get_i32(h, "mthr", &v) == ESP_OK && v >= 0 && v <= 30)         g_micThr   = (int)v;
+    if (nvs_get_i32(h, "mgate",&v) == ESP_OK && v >= 0 && v <= 50)         g_micGate  = (int)v;
     if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net      = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]    = (int)v;
     if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]    = (int)v;
@@ -238,7 +270,11 @@ static void nvs_save_settings() {
     nvs_set_i32(h, "sig",  (int32_t)g_sigIdx);
     nvs_set_i32(h, "nud",  (int32_t)g_nudgeIdx);
     nvs_set_i32(h, "brit", (int32_t)g_brit);
-    nvs_set_i32(h, "cdj",  (int32_t)g_cdj);
+    nvs_set_i32(h, "mode", (int32_t)g_mode);
+    nvs_set_i32(h, "mwin", (int32_t)g_micWin);
+    nvs_set_i32(h, "mslew",(int32_t)g_micSlew);
+    nvs_set_i32(h, "mthr", (int32_t)g_micThr);
+    nvs_set_i32(h, "mgate",(int32_t)g_micGate);
     nvs_set_i32(h, "net",  (int32_t)g_net);
     nvs_set_i32(h, "ip0",  (int32_t)g_ip[0]);
     nvs_set_i32(h, "ip1",  (int32_t)g_ip[1]);
@@ -257,7 +293,8 @@ static void nvs_save_settings() {
 }
 
 static void factory_reset() {
-    g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 1; g_cdj = 1;
+    g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 1; g_mode = MODE_CDJ;
+    g_micWin = 10; g_micSlew = 10; g_micThr = 8; g_micGate = 5;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
@@ -284,17 +321,24 @@ static void factory_reset() {
 
 static bool menu_item_visible(int item) {
     if (item == MENU_RESET) return false;
+    // Mic tuning knobs only matter in Audio mode
+    if (item == MENU_MWIN || item == MENU_MSLEW || item == MENU_MTHR || item == MENU_MGATE)
+        return g_mode == MODE_AUDIO;
     if (item == MENU_IP || item == MENU_SN || item == MENU_GT) return g_net == 1;
     return true;
 }
 
 static int menu_get_val(int item) {
     switch (item) {
-        case MENU_SIG:  return g_sigIdx;
-        case MENU_ACC:  return g_nudgeIdx;
-        case MENU_BRIT: return g_brit;
-        case MENU_CDJ:  return g_cdj;
-        case MENU_NET:  return g_net;
+        case MENU_SIG:   return g_sigIdx;
+        case MENU_ACC:   return g_nudgeIdx;
+        case MENU_BRIT:  return g_brit;
+        case MENU_MODE:  return g_mode;
+        case MENU_MWIN:  return g_micWin;
+        case MENU_MSLEW: return g_micSlew;
+        case MENU_MTHR:  return g_micThr;
+        case MENU_MGATE: return g_micGate;
+        case MENU_NET:   return g_net;
         default: return 0;
     }
 }
@@ -303,22 +347,30 @@ static int menu_val_min(int item) { (void)item; return 0; }
 
 static int menu_val_max(int item) {
     switch (item) {
-        case MENU_SIG:  return kSigCount - 1;
-        case MENU_ACC:  return kNudgeCount - 1;
-        case MENU_BRIT: return kBritCount - 1;
-        case MENU_CDJ:  return 1;
-        case MENU_NET:  return 1;
+        case MENU_SIG:   return kSigCount - 1;
+        case MENU_ACC:   return kNudgeCount - 1;
+        case MENU_BRIT:  return kBritCount - 1;
+        case MENU_MODE:  return 2;
+        case MENU_MWIN:  return 30;
+        case MENU_MSLEW: return 50;
+        case MENU_MTHR:  return 30;
+        case MENU_MGATE: return 50;
+        case MENU_NET:   return 1;
         default: return 0;
     }
 }
 
 static void menu_commit(int item, int val) {
     switch (item) {
-        case MENU_SIG:  g_sigIdx   = val; break;
-        case MENU_ACC:  g_nudgeIdx = val; break;
-        case MENU_BRIT: g_brit     = val; break;
-        case MENU_CDJ:  g_cdj      = val; break;
-        case MENU_NET:  g_net      = val; break;
+        case MENU_SIG:   g_sigIdx   = val; break;
+        case MENU_ACC:   g_nudgeIdx = val; break;
+        case MENU_BRIT:  g_brit     = val; break;
+        case MENU_MODE:  g_mode     = val; break;
+        case MENU_MWIN:  g_micWin   = val; break;
+        case MENU_MSLEW: g_micSlew  = val; break;
+        case MENU_MTHR:  g_micThr   = val; break;
+        case MENU_MGATE: g_micGate  = val; break;
+        case MENU_NET:   g_net      = val; break;
     }
 }
 
@@ -333,48 +385,19 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_B, CH_e, CH_a, CH_t                                       },  // Beat
     { CH_n, CH_u, CH_d, MAX7219Display::SEG_BLANK                  },  // nud
     { CH_L, CH_e, CH_d, MAX7219Display::SEG_BLANK                  },  // Led
-    { CH_C, CH_d, CH_J, MAX7219Display::SEG_BLANK                  },  // Cdj
+    { CH_n, CH_o, CH_d, CH_e                                       },  // node (mode)
+    { CH_u, CH_i, CH_n, CH_d                                       },  // uind (mic window)
+    { CH_S, CH_L, CH_e, CH_u                                       },  // SLEu (mic slew)
+    { CH_t, CH_h, CH_r, MAX7219Display::SEG_BLANK                  },  // thr  (mic threshold)
+    { CH_g, CH_A, CH_t, CH_e                                       },  // gAte (mic noise gate)
     { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
     { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
     { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
     { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
     { CH_r, CH_S, CH_e, CH_t                                       },  // rSet
     { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK                  },  // vEr  (CH_u renders as 'v')
-    { CH_b, CH_A, CH_t, MAX7219Display::SEG_BLANK                  },  // bAt
     { CH_d, CH_o, CH_n, CH_e                                       },  // done
 };
-
-static int read_battery_pct() {
-    if (!s_adc1) return 0;
-
-    // Average 16 samples to reduce ADC noise
-    int32_t sum = 0;
-    for (int i = 0; i < 16; i++) {
-        int raw = 0;
-        adc_oneshot_read(s_adc1, ADC_CHANNEL_0, &raw);
-        sum += raw;
-    }
-    // 100k/100k divider, ADC_ATTEN_DB_12 full scale ≈ 3900 mV at raw 4095
-    uint32_t batt_mv = (uint32_t)(sum / 16) * 7800 / 4095;
-
-    // EMA to damp display jitter (~0.8 s time constant at 50 ms update rate)
-    static int32_t filtered_mv = 0;
-    static bool    initialized  = false;
-    if (!initialized) { filtered_mv = (int32_t)batt_mv; initialized = true; }
-    else               { filtered_mv = (filtered_mv * 15 + (int32_t)batt_mv) / 16; }
-
-    uint32_t fmv = (uint32_t)filtered_mv;
-    static const uint32_t v[]   = {3000, 3400, 3600, 3700, 3800, 3900, 4000, 4100, 4200};
-    static const int      soc[] = {   0,   10,   20,   35,   50,   65,   80,   90,  100};
-
-    if (fmv <= v[0]) return 0;
-    if (fmv >= v[8]) return 100;
-    for (int i = 0; i < 8; i++) {
-        if (fmv < v[i + 1])
-            return soc[i] + (int)((fmv - v[i]) * (soc[i + 1] - soc[i]) / (v[i + 1] - v[i]));
-    }
-    return 100;
-}
 
 static void render_int3(uint8_t *segs, int val) {
     int h = val / 100, t = (val / 10) % 10, u = val % 10;
@@ -395,17 +418,16 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
         case MENU_BRIT:
             render_int3(segs, val + 1);  // show 1-4 (user level)
             break;
-        case MENU_CDJ:
-            segs[5] = MAX7219Display::SEG_BLANK;
-            if (val == 0) {
-                segs[5] = MAX7219Display::digit(0);  // O
-                segs[6] = CH_F;
-                segs[7] = CH_F;
-            } else {
-                segs[6] = MAX7219Display::digit(0);  // O
-                segs[7] = CH_n;
-            }
+        case MENU_MODE:
+            // 3-char value, right-justified: CdJ / Aud / tAP
+            if (val == MODE_CDJ)       { segs[5] = CH_C; segs[6] = CH_d; segs[7] = CH_J; }
+            else if (val == MODE_AUDIO){ segs[5] = CH_A; segs[6] = CH_u; segs[7] = CH_d; }
+            else                       { segs[5] = CH_t; segs[6] = CH_A; segs[7] = CH_P; }
             break;
+        case MENU_MWIN:  render_int3(segs, val); break;
+        case MENU_MSLEW: render_int3(segs, val); break;
+        case MENU_MTHR:  render_int3(segs, val); break;
+        case MENU_MGATE: render_int3(segs, val); break;
         case MENU_NET:
             // 4-char value fills positions 4-7, overriding the blank separator
             if (val == 0) {
@@ -424,9 +446,6 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             segs[5] = MAX7219Display::digit(FW_MAJOR) | MAX7219Display::SEG_DP;
             segs[6] = MAX7219Display::digit(FW_MINOR) | MAX7219Display::SEG_DP;
             segs[7] = MAX7219Display::digit(FW_PATCH);
-            break;
-        case MENU_BAT:
-            render_int3(segs, read_battery_pct());
             break;
         case MENU_DONE:
             break;
@@ -490,7 +509,12 @@ static void update_display() {
             segs[2] = MAX7219Display::digit(units) | MAX7219Display::SEG_DP;
             segs[3] = MAX7219Display::digit(tenths);
             segs[5] = MAX7219Display::digit((int)floor(phase) + 1);
-            if (g_cdj_active) segs[6] = CH_C;
+            // Persistent mode bar (top=CDJ, middle=Manual, bottom=Audio)
+            segs[4] = (g_mode == MODE_CDJ) ? BAR_TOP
+                    : (g_mode == MODE_MANUAL) ? BAR_MID : BAR_BOT;
+            // Lock/active indicator
+            if (g_mode == MODE_CDJ && g_cdj_active)        segs[6] = CH_C;
+            else if (g_mode == MODE_AUDIO && g_mic_locked) segs[6] = CH_A;
             segs[7] = MAX7219Display::digit(peers > 9 ? 9 : peers);
         }
         display.setSegments(segs);
@@ -714,7 +738,9 @@ static void nvs_save_ota_pending(bool pending) {
 static void rtc_save_settings() {
     s_rtc.magic    = RTC_MAGIC;
     s_rtc.sigIdx   = g_sigIdx;   s_rtc.nudgeIdx = g_nudgeIdx;
-    s_rtc.brit     = g_brit;     s_rtc.cdj      = g_cdj;     s_rtc.net = g_net;
+    s_rtc.brit     = g_brit;     s_rtc.mode     = g_mode;    s_rtc.net = g_net;
+    s_rtc.micWin   = g_micWin;   s_rtc.micSlew  = g_micSlew;
+    s_rtc.micThr   = g_micThr;   s_rtc.micGate  = g_micGate;
     for (int i = 0; i < 4; i++) { s_rtc.ip[i] = g_ip[i]; s_rtc.sn[i] = g_sn[i]; s_rtc.gt[i] = g_gt[i]; }
     strncpy(s_rtc.wifi_ssid, g_wifi_ssid, sizeof(s_rtc.wifi_ssid));
     strncpy(s_rtc.wifi_pass, g_wifi_pass, sizeof(s_rtc.wifi_pass));
@@ -730,7 +756,11 @@ static void rtc_restore_to_nvs_if_valid() {
     nvs_set_i32(h, "sig",       s_rtc.sigIdx);
     nvs_set_i32(h, "nud",       s_rtc.nudgeIdx);
     nvs_set_i32(h, "brit",      s_rtc.brit);
-    nvs_set_i32(h, "cdj",       s_rtc.cdj);
+    nvs_set_i32(h, "mode",      s_rtc.mode);
+    nvs_set_i32(h, "mwin",      s_rtc.micWin);
+    nvs_set_i32(h, "mslew",     s_rtc.micSlew);
+    nvs_set_i32(h, "mthr",      s_rtc.micThr);
+    nvs_set_i32(h, "mgate",     s_rtc.micGate);
     nvs_set_i32(h, "net",       s_rtc.net);
     nvs_set_i32(h, "ip0",  s_rtc.ip[0]); nvs_set_i32(h, "ip1",  s_rtc.ip[1]);
     nvs_set_i32(h, "ip2",  s_rtc.ip[2]); nvs_set_i32(h, "ip3",  s_rtc.ip[3]);
@@ -836,6 +866,14 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         httpd_resp_sendstr_chunk(req, tmp);
     }
     httpd_resp_sendstr_chunk(req, "</select>");
+    httpd_resp_sendstr_chunk(req, "<label>Sync mode</label><select name=mode>");
+    static const char *modes[] = {"CDJ", "Audio (mic)", "Manual"};
+    for (int i = 0; i < 3; i++) {
+        snprintf(tmp, sizeof(tmp), "<option value=%d%s>%s</option>",
+            i, i == g_mode ? " selected" : "", modes[i]);
+        httpd_resp_sendstr_chunk(req, tmp);
+    }
+    httpd_resp_sendstr_chunk(req, "</select>");
     snprintf(tmp, sizeof(tmp),
         "<label>Brightness (1-4)</label>"
         "<input name=brit type=number min=1 max=4 value=%d>", g_brit + 1);
@@ -909,6 +947,7 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
 
     char tmp[64];
     if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount)   g_sigIdx   = v; }
+    if (form_field(body, "mode", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 2)          g_mode     = v; }
     if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp) - 1; if (v >= 0 && v <= 3)       g_brit     = v; }
     if (form_field(body, "acc",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kNudgeCount)  g_nudgeIdx = v; }
     free(body);
@@ -1079,9 +1118,49 @@ static void exit_menu() {
     appMode = MODE_NORMAL;
 }
 
+static double current_link_bpm() {
+    abl_link_capture_app_session_state(s_link, s_session);
+    return abl_link_tempo(s_session);
+}
+
 static void do_tap() {
-    if (g_cdj && g_cdj_active) return;
+    // CDJ is ground truth only while in CDJ mode and a player is broadcasting
+    if (g_mode == MODE_CDJ && g_cdj_active) return;
+
     TapResult r = tapTempo.tap();
+
+    if (g_mode == MODE_AUDIO) {
+        // Audio mode: the mic supplies tempo, the tap supplies the downbeat.
+        // bpmChanged (4+ taps) covers both the first go-live AND every later
+        // re-tap; wentLive only fires once ever, so we must use bpmChanged.
+        if (r.bpmChanged) {
+            // 4 taps → tempo override; re-anchors the mic tracker on it
+            go_live(tapTempo.bpm(), tapTempo.sessionStartMs());
+            g_mic_tracked   = tapTempo.bpm();
+            g_mic_tapAnchor = tapTempo.bpm();
+            g_mic_armed     = true;
+            printf("Audio: tap override %.1f BPM\n", tapTempo.bpm());
+        } else if (g_mic_armed) {
+            // Already tracking → a lone tap only re-asserts the downbeat at the
+            // current tempo. The mic owns BPM, so do NOT change it.
+            if (linkEnabled) reset_downbeat();
+            printf("Audio: downbeat re-synced at %.1f BPM\n", (double)g_mic_tracked);
+        } else {
+            // First tap → arm the tracker with the mic's current estimate,
+            // downbeat = now.
+            double seed = (g_mic_bpm > 0.0) ? (double)g_mic_bpm
+                        : (linkEnabled ? current_link_bpm() : 120.0);
+            if (!linkEnabled) go_live(seed, now_ms());   // downbeat = this tap
+            else { set_link_tempo(seed); reset_downbeat(); }
+            g_mic_tracked   = seed;
+            g_mic_tapAnchor = seed;
+            g_mic_armed     = true;
+            printf("Audio: armed at %.1f BPM (mic %.1f)\n", seed, (double)g_mic_bpm);
+        }
+        return;
+    }
+
+    // CDJ-mode fallback (no player present) or Manual mode → classic tap tempo
     if (r.wentLive) {
         go_live(tapTempo.bpm(), tapTempo.sessionStartMs());
         printf("Live: %.1f BPM\n", tapTempo.bpm());
@@ -1195,7 +1274,7 @@ static void on_select_short_press() {
         case MODE_MENU_NAV:
             if (menuItem == MENU_DONE) {
                 exit_menu();
-            } else if (menuItem == MENU_VER || menuItem == MENU_BAT) {
+            } else if (menuItem == MENU_VER) {
                 menuEnteredAt = now;
             } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
                 menuSubItem   = 0;
@@ -1465,7 +1544,7 @@ static void cdj_task(void *) {
     addr.sin_port        = htons(CDJ_PORT);
     bind(sock, (struct sockaddr *)&addr, sizeof(addr));
 
-    // 200 ms receive timeout so the loop can check g_cdj even without traffic
+    // 200 ms receive timeout so the loop can check the mode even without traffic
     struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 };
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
@@ -1477,7 +1556,7 @@ static void cdj_task(void *) {
         int n = recv(sock, buf, sizeof(buf), 0);
         if (n > 0) cdj_parse_beat(buf, n);
 
-        if (!g_cdj || !linkEnabled) {
+        if (g_mode != MODE_CDJ || !linkEnabled) {
             g_cdj_active = false;
             prev_bb   = 0;
             prev_best = 0;
@@ -1520,36 +1599,188 @@ static void print_status() {
     lastPrint = now;
     if (!linkEnabled) { printf("Cold start — tap 4 times to go live\n"); return; }
     abl_link_capture_app_session_state(s_link, s_session);
-    printf("Link: %.2f BPM  sig: %.0f  peers: %llu  eth: %s  cdj: %s%s\n",
+    static const char *kModeStr[] = { "CDJ", "Audio", "Manual" };
+    printf("Link: %.2f BPM  sig: %.0f  peers: %llu  eth: %s  mode: %s%s\n",
            abl_link_tempo(s_session), linkQuantum,
            (unsigned long long)abl_link_num_peers(s_link),
            ethConnected ? ethIPStr : "disconnected",
-           g_cdj ? "on" : "off",
-           (g_cdj && g_cdj_active) ? " (active)" : "");
+           kModeStr[g_mode],
+           (g_mode == MODE_CDJ && g_cdj_active) ? " (cdj active)"
+           : (g_mode == MODE_AUDIO && g_mic_locked) ? " (mic locked)" : "");
 }
 
 // ── GPIO init ──────────────────────────────────────────────────────────────────
 
 static void init_gpio() {
+    // Tap (IO35) and Select (IO39) are input-only pins with NO internal pulls —
+    // external 10k pullups to 3V3 are required on the board.
     gpio_config_t btn_cfg = {
         .pin_bit_mask = (1ULL << PIN_TAP_BUTTON) | (1ULL << PIN_SELECT),
         .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
     gpio_config(&btn_cfg);
 }
 
-static void init_adc() {
-    adc_oneshot_unit_init_cfg_t unit_cfg = {};
-    unit_cfg.unit_id = ADC_UNIT_1;
-    adc_oneshot_new_unit(&unit_cfg, &s_adc1);
+// ── INMP441 I2S microphone ──────────────────────────────────────────────────────
 
-    adc_oneshot_chan_cfg_t chan_cfg = {};
-    chan_cfg.atten    = ADC_ATTEN_DB_12;
-    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
-    adc_oneshot_config_channel(s_adc1, ADC_CHANNEL_0, &chan_cfg);
+static void init_i2s_mic() {
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    if (i2s_new_channel(&chan_cfg, nullptr, &s_i2s_rx) != ESP_OK) {
+        printf("I2S: channel alloc failed\n");
+        s_i2s_rx = nullptr;
+        return;
+    }
+    i2s_std_config_t std_cfg = {
+        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(MIC_SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = PIN_I2S_BCLK,
+            .ws   = PIN_I2S_WS,
+            .dout = I2S_GPIO_UNUSED,
+            .din  = PIN_I2S_DIN,
+            .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
+        },
+    };
+    // INMP441 channel selection on the ESP32 is finicky; in bring-up, MONO mode
+    // returned all-zero samples on both slot settings, so we capture BOTH slots
+    // in stereo and use only the left (mic) samples (see BEAT_DETECTION.md §3).
+    // INMP441 L/R tied to GND → data is on the left slot.
+    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
+    if (i2s_channel_init_std_mode(s_i2s_rx, &std_cfg) != ESP_OK ||
+        i2s_channel_enable(s_i2s_rx) != ESP_OK) {
+        printf("I2S: init/enable failed\n");
+        s_i2s_rx = nullptr;
+    }
+}
+
+// Energy-based kick-band beat detector with tap-anchored, octave-folded,
+// slew-limited BPM tracking. See [[project-inmp441-plan]].
+static void mic_task(void *) {
+    if (!s_i2s_rx) { vTaskDelete(nullptr); return; }
+    abl_link_session_state mic_sess = abl_link_create_session_state();
+
+    static int32_t samples[256];
+    double   lp = 0.0, hp = 0.0, xprev = 0.0;  // band-pass state
+    double   baseline = 0.0;                    // adaptive energy floor
+    uint32_t lastOnset = 0, lastApply = 0, lastDbg = 0;
+    int      consec = 0;
+    double   avgInterval   = 0.0;               // EMA of clean inter-beat interval (ms)
+    double   lastTapAnchor = 0.0;               // detect re-arm → reset the average
+    const double alpha = 0.06;                  // ~150 Hz LP at 16 kHz
+
+    while (true) {
+        size_t br = 0;
+        if (i2s_channel_read(s_i2s_rx, samples, sizeof(samples), &br, pdMS_TO_TICKS(100)) != ESP_OK)
+            continue;
+        int n = (int)(br / sizeof(int32_t));
+        if (n <= 0) continue;
+
+        double energy = 0.0;
+        int    cnt    = 0;
+        for (int i = 0; i < n; i += 2) {                   // left slot only (mic data)
+            double x = (double)samples[i] / 2147483648.0;  // normalize to ~[-1,1)
+            double y = x - xprev + 0.995 * hp;             // DC blocker (high-pass)
+            xprev = x; hp = y;
+            lp += (y - lp) * alpha;                         // low-pass → kick band
+            energy += lp * lp;
+            cnt++;
+        }
+        energy /= (cnt > 0 ? cnt : 1);
+        baseline += (energy - baseline) * 0.02;            // slow adaptive floor
+
+        uint32_t now = now_ms();
+
+        if (g_mode != MODE_AUDIO) { g_mic_armed = false; g_mic_locked = false; consec = 0; avgInterval = 0.0; }
+
+        double threshFactor = 1.0 + (double)g_micThr / 10.0;
+        double gate         = (double)g_micGate * 1e-5;
+        bool onset = (energy > baseline * threshFactor) &&
+                     (energy > gate) &&
+                     ((now - lastOnset) > 250);            // refractory → ≤240 BPM
+
+        if (onset) {
+            if (lastOnset != 0) {
+                double interval = (double)(now - lastOnset);
+                double bpm = 60000.0 / interval;
+                if (bpm >= 50.0 && bpm <= 220.0) {
+                    g_mic_bpm = bpm;                        // raw hint for display
+
+                    if (g_mode == MODE_AUDIO && g_mic_armed) {
+                        // Judge acceptance against the STABLE tapped tempo, not the
+                        // wandering output — otherwise a small drift makes the window
+                        // admit one interval tail and reject the other, ratcheting away.
+                        double anchor = (g_mic_tapAnchor > 0.0) ? g_mic_tapAnchor : g_mic_tracked;
+                        if (anchor != lastTapAnchor) { avgInterval = 0.0; lastTapAnchor = anchor; }
+
+                        double cand = bpm;
+                        while (cand > anchor * 1.4) cand *= 0.5;   // fold octaves to anchor
+                        while (cand < anchor * 0.7) cand *= 2.0;
+                        double frac = (double)g_micWin / 100.0;
+                        if (fabs(cand - anchor) <= anchor * frac) {
+                            // Average the clean ~1-beat interval (EMA) → accurate, continuous
+                            // tempo, unbiased (interval domain) and free of the 8 ms grid.
+                            if (cand == bpm) {                       // un-folded → true 1-beat
+                                if (avgInterval <= 0.0) avgInterval = interval;
+                                else                    avgInterval += 0.08 * (interval - avgInterval);
+                            }
+                            double target = (avgInterval > 0.0) ? (60000.0 / avgInterval) : cand;
+
+                            // Deadband: once trk is within ~0.4 BPM of the target, freeze it
+                            // so the displayed tempo stops flickering. Genuine drift beyond
+                            // the band still moves it, slew-limited (0.1%/sec).
+                            double delta = target - g_mic_tracked;
+                            if (fabs(delta) > 0.4) {
+                                double dt      = (lastApply ? (now - lastApply) : 500) / 1000.0;
+                                double maxStep = (double)g_micSlew * 0.001 * g_mic_tracked * dt;
+                                if (delta >  maxStep) delta =  maxStep;
+                                if (delta < -maxStep) delta = -maxStep;
+                                g_mic_tracked += delta;
+                            }
+                            // Clamp ±20% of the tapped tempo (octave/subharmonic guard)
+                            double lo = anchor * 0.80, hi = anchor * 1.20;
+                            if (g_mic_tracked < lo) g_mic_tracked = lo;
+                            if (g_mic_tracked > hi) g_mic_tracked = hi;
+                            lastApply = now;
+                            if (++consec >= 4) g_mic_locked = true;
+
+                            if (linkEnabled) {
+                                uint64_t t = now_us();
+                                abl_link_capture_app_session_state(s_link, mic_sess);
+                                abl_link_set_tempo(mic_sess, g_mic_tracked, t);
+                                // Phase-lock (only once locked): gently pull the grid so
+                                // the detected kick lands on the NEAREST beat. Nearest-beat
+                                // correction preserves the tapped bar/downbeat.
+                                if (g_mic_locked) {
+                                    double beat    = abl_link_beat_at_time(mic_sess, t, linkQuantum);
+                                    double nearest = floor(beat + 0.5);
+                                    double fixed   = beat + 0.15 * (nearest - beat);  // low gain
+                                    abl_link_force_beat_at_time(mic_sess, fixed, t, linkQuantum);
+                                }
+                                abl_link_commit_app_session_state(s_link, mic_sess);
+                            }
+                        }
+                        // No consec reset on a windowed-out value → lock stays sticky
+                    }
+                }
+            }
+            lastOnset = now;
+        }
+
+        if (g_mic_locked && (now - lastOnset) > 3500) { g_mic_locked = false; consec = 0; avgInterval = 0.0; }
+
+        // Tuning telemetry while in Audio mode
+        if (g_mode == MODE_AUDIO && (now - lastDbg) >= 500) {
+            lastDbg = now;
+            printf("mic e=%.0f base=%.0f thrx=%.2f gate=%.0f raw=%.1f trk=%.1f armed=%d lock=%d\n",
+                   energy * 1e6, baseline * 1e6, threshFactor, gate * 1e6,
+                   (double)g_mic_bpm, (double)g_mic_tracked,
+                   g_mic_armed ? 1 : 0, g_mic_locked ? 1 : 0);
+        }
+    }
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────────
@@ -1566,8 +1797,20 @@ extern "C" void app_main(void) {
     esp_netif_init();
 
     init_gpio();
-    init_adc();
+    init_i2s_mic();
     display.init();
+
+    // Earliest possible "alive" indicator: light every segment the moment the
+    // display is up, so the operator can see the board booted and the display
+    // works — well before the (slow) Ethernet link and IP splash appear. This
+    // persists through the Ethernet wait until the splash/normal view replaces it.
+    {
+        display.setIntensity(8);
+        uint8_t boot[8];
+        for (int i = 0; i < 8; i++) boot[i] = 0xFF;  // all segments + DP
+        display.setSegments(boot);
+    }
+
     nvs_load_settings();  // loads all settings including WiFi credentials
 
     if (esp_reset_reason() == ESP_RST_BROWNOUT) {
@@ -1634,7 +1877,9 @@ extern "C" void app_main(void) {
     xTaskCreate(osc_task, "osc", 4096, nullptr, 5, nullptr);
     printf("OSC listening on port %d\n", OSC_PORT);
     xTaskCreate(cdj_task, "cdj", 4096, nullptr, 5, nullptr);
-    printf("CDJ listener on port %d (mode: %s)\n", CDJ_PORT, g_cdj ? "on" : "off");
+    printf("CDJ listener on port %d\n", CDJ_PORT);
+    xTaskCreate(mic_task, "mic", 4096, nullptr, 5, nullptr);
+    printf("Mic beat detector started\n");
 
     while (true) {
         handle_system_buttons();

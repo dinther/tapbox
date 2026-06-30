@@ -25,8 +25,9 @@ tapbox uses an 8-digit display that shows you everything you need at a glance. I
 Reading left to right:
 
 - **120.0** — the current tempo in BPM, updated in real time when any device in the Link session adjusts it
+- **mode bar** — a single horizontal bar just after the tempo shows which sync mode is active: **top bar = CDJ**, **middle bar = Manual**, **bottom bar = Audio**
 - **3** — which beat of the bar you are on right now (this advances with the music)
-- **C** — appears when tapbox is locked to a Pioneer CDJ via Pro DJ Link; blank when not active
+- **C / A** — a lock indicator: `C` when locked to a Pioneer CDJ (CDJ mode), `A` when the microphone has a steady tempo lock (Audio mode); blank when nothing is locked
 - **2** — how many other Link peers are connected to the session
 
 On startup, tapbox joins the existing Link session tempo if one is already running, otherwise it starts at 120 BPM. You can tap a new tempo whenever you are ready.
@@ -48,6 +49,33 @@ Tap the tap button in rhythm. The downbeat for the Link session is immediately d
 You do not have to be perfectly precise. tapbox averages the timing across all your taps, so the more taps in sequence, the more accurate the reading becomes.
 
 After you are locked in, any further taps continue to refine the tempo. tapbox considers the session established when you stop tapping for two seconds. Simply start tapping again to define a new tempo.
+
+---
+
+## Sync Modes
+
+tapbox can get its tempo three different ways. You pick one with the `node` menu item, and the active mode is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio).
+
+### Manual (`tAP`)
+
+Classic tap tempo, exactly as described above. You are in full control — tap four times to set the tempo and the downbeat.
+
+### Audio (`Aud`)
+
+A small microphone listens to the room and works out the tempo for you, while **you** tap the downbeat. This is the hybrid mode: the machine handles the BPM, you handle the musical "beat 1".
+
+How to use it:
+
+1. Switch `node` to `Aud`. The bottom bar lights up. Nothing happens to the tempo yet — the mic is just listening.
+2. Play the music near the microphone.
+3. **Tap once on the beat** to accept the detected tempo and set the downbeat to that moment — or **tap four times** if you want to set the tempo yourself and let the mic refine it from there.
+4. The `A` indicator lights when the mic has a steady lock. From then on the tempo tracks the music automatically; a single tap any time re-aligns the downbeat without changing the tempo.
+
+The detector is tuned for a clear kick drum. Four menu items (`uind`, `SLEu`, `thr`, `gAte`, shown only in Audio mode) fine-tune it — see the technical write-up in `BEAT_DETECTION.md` if you want to understand or adjust them.
+
+### CDJ (`Cdj`)
+
+tapbox passively reads Pioneer Pro DJ Link beat packets off the network and feeds the CDJ's tempo straight into Ableton Link — no tapping needed. See the CDJ details below.
 
 ---
 
@@ -95,7 +123,7 @@ The config page is available at the device IP address on port 80 from any browse
 
 **Network** (WiFi SSID/password, Ethernet mode, static IP/subnet/gateway) — tap **Save Network — tapbox will reboot** to apply. The orange button is a reminder that a reboot follows.
 
-**Display** (time signature, brightness, accuracy) — tap **Save Display Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
+**Display** (time signature, sync mode, brightness, nudge size) — tap **Save Display Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
 
 ---
 
@@ -143,19 +171,34 @@ The display gives you a live preview as you change the value. In a dark venue, l
 
 ---
 
-### Cdj — Pioneer CDJ Sync
+### node — Sync Mode
 
-**What it does:** enables or disables passive listening for Pioneer Pro DJ Link beat packets on the network.
+**What it does:** selects where tapbox gets its tempo. Three values:
 
-When **On**, tapbox listens on the same Ethernet switch as your CDJ players and reads their beat timing automatically. The current BPM from the active CDJ is fed directly into the Ableton Link session — all your Link peers follow the CDJ without any manual tapping required. A `C` indicator appears on the display between the beat counter and the peer count to confirm the lock is active.
+- **`Cdj`** — Pioneer Pro DJ Link (see below)
+- **`Aud`** — audio beat detection from the microphone (you tap the downbeat)
+- **`tAP`** — manual tap tempo
 
-tapbox follows whichever CDJ has the lowest player number (1 → 2 → 3 → 4). If that player stops sending for more than two seconds — because it was stopped or disconnected — tapbox drops down to the next available player. If no CDJ is found on the network, tapbox falls back to tap-tempo as normal.
+The active mode is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio). See the **Sync Modes** section earlier in this manual for how each one works in practice.
 
-While CDJ sync is active, the tap button does not affect the tempo — the CDJ is in control. Turn CDJ sync **Off** in this menu to regain manual tap-tempo control.
+**About CDJ mode:** when set to `Cdj`, tapbox listens on the same Ethernet switch as your CDJ players and reads their beat timing automatically. The active CDJ's BPM is fed directly into the Ableton Link session — all your Link peers follow the CDJ without any tapping. A `C` indicator confirms the lock. tapbox follows the lowest player number (1 → 2 → 3 → 4); if that player stops for more than two seconds it drops to the next. While a CDJ is actively driving the tempo, the tap button is ignored — the CDJ is in control. If no CDJ is present, CDJ mode behaves like manual tap tempo.
 
-> CDJ sync requires Ethernet. tapbox must be on the same wired network switch as the CDJ players. No software needs to be installed on the CDJs — tapbox listens passively and the CDJs do not know it is there.
+> CDJ sync requires Ethernet, on the same wired switch as the players. Nothing is installed on the CDJs — tapbox listens passively.
 
-*Default: On*
+*Default: Cdj*
+
+---
+
+### uind, SLEu, thr, gAte — Audio Tuning
+
+These four items only appear when `node` is set to `Aud`. They tune the microphone beat detector:
+
+- **`uind`** — accept window: how far (± %) a detected beat may sit from your tapped tempo before it is ignored.
+- **`SLEu`** — tempo slew: how fast the detected tempo is allowed to move (rate limit), in units of 0.1 %/sec.
+- **`thr`** — onset threshold: how strong a kick must be to count. Higher rejects more false hits.
+- **`gAte`** — noise gate: an absolute signal floor so quiet rooms don't trigger.
+
+The defaults work for typical four-on-the-floor material. For the full explanation of what each does and how to dial them in, see `BEAT_DETECTION.md`.
 
 ---
 
@@ -196,16 +239,6 @@ Factory defaults: **192.168.1.200** / **255.255.255.0** / **192.168.1.1**.
 
 ---
 
-### bAt — Battery Level
-
-**What it does:** shows the estimated state of charge of the connected battery as a percentage from 0 to 100.
-
-Requires a 100 kΩ / 100 kΩ voltage divider connected from battery positive to GND, with the midpoint wired to IO36. If not fitted the reading is meaningless.
-
-Accuracy is approximately ±10%. Read-only.
-
----
-
 ### done — Exit Menu
 
 Returns to normal mode immediately.
@@ -234,7 +267,7 @@ To cancel: press **tap**, hold **select** for 1 second, or wait 6 seconds — ta
 
 Open the menu, then hold both the **tap button** and the **select button** for **8 seconds**. You will see `UPd.----` at 3 seconds and then `rSEt SurE` at 8 seconds. Release the buttons.
 
-Press **select** to confirm. tapbox resets all settings to factory defaults — accuracy to Std, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
+Press **select** to confirm. tapbox resets all settings to factory defaults — sync mode to CDJ, time signature to 4, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
 
 To cancel: press nothing (or press tap). The display returns to normal after 6 seconds without resetting anything.
 
