@@ -54,14 +54,13 @@ INMP441 wiring: **VDD → 3.3 V**, **GND → GND**, **L/R → GND** (selects the
 
 ## Display Layout
 
-**Normal mode:**
-```
-[ BPM hundreds ][ BPM tens ][ BPM units . ][ BPM tenths ][ mode bar ][ beat ][ lock ][ peers ]
-```
-Example: `120.0` at beat 3 of 4 with 2 peers → `·120.0 3 2`
+![Display layout](docs/display.jpg)
 
-- **Mode bar** (position 5): a single horizontal segment shows the active sync mode — **top = CDJ**, **middle = Manual**, **bottom = Audio**.
-- **Lock** (position 7): shows `C` when locked to a Pioneer CDJ (CDJ mode), or `A` when the microphone has a stable BPM lock (Audio mode); blank otherwise.
+- **beat** — current BPM, four digits with decimal point (`120.0`)
+- **mode bar** — single horizontal segment: **top = CDJ**, **middle = Tap only**, **bottom = Audio**
+- **count** — beat position in the bar (1–4, or up to your time signature)
+- **lock dot** — decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio mode searching; **off** = no lock
+- **peers** — number of other Ableton Link peers on the network
 
 **Menu mode:**
 ```
@@ -87,7 +86,7 @@ Value flashes at 4 Hz in edit mode.
 | `nud ` | OSC nudge size | 50 ms · 20 ms · 5 ms |
 | `Led ` | Display brightness | 1 – 4 (live preview) |
 | `node` | Sync mode | `Cdj` · `Aud` (audio) · `tAP` (manual) |
-| `uind` | Mic accept window | ± % around tapped tempo (Audio mode only) |
+| `uind` | Mic accept window | ± BPM around tapped tempo, 1–10 (Audio mode only) |
 | `SLEu` | Mic tempo slew | rate limit, 0.1 %/sec units (Audio mode only) |
 | `thr ` | Mic onset threshold | sensitivity to kicks (Audio mode only) |
 | `gAte` | Mic noise gate | absolute signal floor (Audio mode only) |

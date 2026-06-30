@@ -60,28 +60,43 @@ def udp_loop():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.bind(('', 0))
     beat_idx  = 0
-    next_send = time.monotonic()
+    now       = time.monotonic()
+    next_send = now
+    next_beat = now + 60.0 / 120.0  # advances to beat 2 after first beat elapses
+
     while True:
         with state_lock:
-            running = state['running']
-            bpm     = state['bpm']
-            player  = state['player']
+            running  = state['running']
+            bpm      = state['bpm']
+            player   = state['player']
+            downbeat = state['downbeat']
+            if downbeat:
+                state['downbeat'] = False
+
         if running:
             now = time.monotonic()
+
+            if downbeat:
+                # Immediately start beat 1 and schedule next beat from now
+                beat_idx  = 0
+                next_beat = now + 60.0 / bpm
+
+            if now >= next_beat:
+                # A full beat has elapsed — advance to the next beat in bar
+                beat_idx   = (beat_idx + 1) % 4
+                next_beat += 60.0 / bpm
+
             if now >= next_send:
-                with state_lock:
-                    if state['downbeat']:
-                        beat_idx = 0
-                        state['downbeat'] = False
                 pkt = build_beat_packet(bpm, beat_idx + 1, player)
                 sock.sendto(pkt, (BROADCAST, CDJ_PORT))
-                beat_idx  = (beat_idx + 1) % 4
                 next_send += SEND_INTERVAL
             else:
-                time.sleep(max(0.0, next_send - now - 0.001))
+                time.sleep(max(0.0, min(next_send, next_beat) - now - 0.001))
         else:
             beat_idx  = 0
-            next_send = time.monotonic()
+            now       = time.monotonic()
+            next_send = now
+            next_beat = now + 60.0 / max(bpm, 20.0)
             time.sleep(0.05)
 
 # ── HTML page ──────────────────────────────────────────────────────────────────
@@ -388,7 +403,7 @@ HTML = """<!DOCTYPE html>
 
   function setDownbeat() {
     fetch('/downbeat', { method: 'POST' });
-    // Flash the button briefly as confirmation
+    restartBeatTimer();  // reset browser animation to beat 1 in sync
     const btn = document.getElementById('downbeat-btn');
     btn.style.background = '#ff5500';
     btn.style.color = '#fff';

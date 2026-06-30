@@ -33,7 +33,7 @@
 #define PIN_I2S_BCLK    GPIO_NUM_4   // INMP441 SCK
 #define PIN_I2S_WS      GPIO_NUM_12  // INMP441 WS  (strapping pin; eFuse-locked on WT32-ETH01)
 #define PIN_I2S_DIN     GPIO_NUM_36  // INMP441 SD  (was battery ADC)
-#define MIC_SAMPLE_RATE 16000
+#define MIC_SAMPLE_RATE 32000
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 #define DEBOUNCE_MS     5
@@ -77,7 +77,7 @@ static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 7
-#define FW_PATCH 1
+#define FW_PATCH 2
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -100,9 +100,7 @@ static int g_net      = 0;             // 0=DHCP, 1=static
 static int g_mode     = MODE_CDJ;      // 0=CDJ, 1=Audio (mic), 2=Manual
 // Mic / beat-detection tuning knobs (live-adjustable while tuning; folded into a
 // preset later). See [[project-inmp441-plan]].
-static int g_micWin   = 10;            // beat-accept window, % around tracked BPM — must
-                                       // stay wide enough to admit the quantization spread;
-                                       // accuracy comes from the multi-beat span, not this
+static int g_micWin   = 4;             // beat-accept window, ± BPM around tapped tempo (1–10)
 static int g_micSlew  = 10;            // tempo slew limit, units of 0.1%/sec (0–50)
 static int g_micThr   = 8;             // onset threshold: energy > baseline*(1+thr/10) (0–30)
 static int g_micGate  = 5;            // absolute noise-gate floor (0–50, ×1e-5 normalized)
@@ -160,6 +158,8 @@ static volatile bool     g_mic_locked = false;  // mic has a stable tracked BPM
 static volatile bool     g_mic_armed  = false;  // a tap has anchored the tracker
 static volatile double   g_mic_tracked = 0.0;   // adaptive anchor / applied BPM
 static volatile double   g_mic_tapAnchor = 0.0; // last tap-set tempo (clamp reference)
+
+static bool g_manual_locked = false;  // true after first 4-tap session in Manual mode
 
 static bool g_wifi_enabled = false;
 static bool g_wifi_as_ap   = false;
@@ -239,7 +239,7 @@ static void nvs_load_settings() {
     if (nvs_get_i32(h, "nud",  &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgeIdx = (int)v;
     if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 0 && v <= 3)          g_brit     = (int)v;
     if (nvs_get_i32(h, "mode", &v) == ESP_OK && v >= 0 && v <= 2)          g_mode     = (int)v;
-    if (nvs_get_i32(h, "mwin", &v) == ESP_OK && v >= 0 && v <= 30)         g_micWin   = (int)v;
+    if (nvs_get_i32(h, "mwin", &v) == ESP_OK && v >= 0 && v <= 10)         g_micWin   = (int)v;
     if (nvs_get_i32(h, "mslew",&v) == ESP_OK && v >= 0 && v <= 50)         g_micSlew  = (int)v;
     if (nvs_get_i32(h, "mthr", &v) == ESP_OK && v >= 0 && v <= 30)         g_micThr   = (int)v;
     if (nvs_get_i32(h, "mgate",&v) == ESP_OK && v >= 0 && v <= 50)         g_micGate  = (int)v;
@@ -294,7 +294,7 @@ static void nvs_save_settings() {
 
 static void factory_reset() {
     g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 1; g_mode = MODE_CDJ;
-    g_micWin = 10; g_micSlew = 10; g_micThr = 8; g_micGate = 5;
+    g_micWin = 4; g_micSlew = 10; g_micThr = 8; g_micGate = 5;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
@@ -351,7 +351,7 @@ static int menu_val_max(int item) {
         case MENU_ACC:   return kNudgeCount - 1;
         case MENU_BRIT:  return kBritCount - 1;
         case MENU_MODE:  return 2;
-        case MENU_MWIN:  return 30;
+        case MENU_MWIN:  return 10;
         case MENU_MSLEW: return 50;
         case MENU_MTHR:  return 30;
         case MENU_MGATE: return 50;
@@ -508,13 +508,16 @@ static void update_display() {
             segs[1] = (hundreds || tens) ? MAX7219Display::digit(tens)     : MAX7219Display::SEG_BLANK;
             segs[2] = MAX7219Display::digit(units) | MAX7219Display::SEG_DP;
             segs[3] = MAX7219Display::digit(tenths);
-            segs[5] = MAX7219Display::digit((int)floor(phase) + 1);
             // Persistent mode bar (top=CDJ, middle=Manual, bottom=Audio)
             segs[4] = (g_mode == MODE_CDJ) ? BAR_TOP
                     : (g_mode == MODE_MANUAL) ? BAR_MID : BAR_BOT;
-            // Lock/active indicator
-            if (g_mode == MODE_CDJ && g_cdj_active)        segs[6] = CH_C;
-            else if (g_mode == MODE_AUDIO && g_mic_locked) segs[6] = CH_A;
+            // Lock dot on beat digit: solid=locked, blinking=Audio searching, blank=inactive
+            bool locked_state = (g_mode == MODE_CDJ    && g_cdj_active)
+                             || (g_mode == MODE_AUDIO  && g_mic_locked)
+                             || (g_mode == MODE_MANUAL && g_manual_locked);
+            bool searching    = (g_mode == MODE_AUDIO && g_mic_armed && !g_mic_locked);
+            bool dot = locked_state || (searching && (now_us() / 250000ULL) % 2 == 0);
+            segs[5] = MAX7219Display::digit((int)floor(phase) + 1) | (dot ? MAX7219Display::SEG_DP : 0);
             segs[7] = MAX7219Display::digit(peers > 9 ? 9 : peers);
         }
         display.setSegments(segs);
@@ -1163,9 +1166,11 @@ static void do_tap() {
     // CDJ-mode fallback (no player present) or Manual mode → classic tap tempo
     if (r.wentLive) {
         go_live(tapTempo.bpm(), tapTempo.sessionStartMs());
+        g_manual_locked = true;
         printf("Live: %.1f BPM\n", tapTempo.bpm());
     } else if (r.bpmChanged && linkEnabled) {
         set_link_tempo(tapTempo.bpm());
+        g_manual_locked = true;
         printf("Tap: %.1f BPM\n", tapTempo.bpm());
     } else if (r.newSession) {
         if (linkEnabled) reset_downbeat();
@@ -1576,8 +1581,8 @@ static void cdj_task(void *) {
             abl_link_capture_app_session_state(s_link, cdj_sess);
             abl_link_set_tempo(cdj_sess, bpm, t);
 
-            // Snap Link bar to CDJ downbeat on the 4→1 transition
-            if (bb == 1 && prev_bb == 4)
+            // Snap Link bar to CDJ downbeat whenever beat-in-bar jumps to 1
+            if (bb == 1 && prev_bb != 1)
                 abl_link_force_beat_at_time(cdj_sess, 0.0, t, linkQuantum);
 
             abl_link_commit_app_session_state(s_link, cdj_sess);
@@ -1667,10 +1672,11 @@ static void mic_task(void *) {
     double   lp = 0.0, hp = 0.0, xprev = 0.0;  // band-pass state
     double   baseline = 0.0;                    // adaptive energy floor
     uint32_t lastOnset = 0, lastApply = 0, lastDbg = 0;
+    uint64_t lastOnsetUs = 0;                   // precise (sub-frame) onset time
     int      consec = 0;
     double   avgInterval   = 0.0;               // EMA of clean inter-beat interval (ms)
     double   lastTapAnchor = 0.0;               // detect re-arm → reset the average
-    const double alpha = 0.06;                  // ~150 Hz LP at 16 kHz
+    const double alpha = 0.03;                  // ~150 Hz LP at 32 kHz
 
     while (true) {
         size_t br = 0;
@@ -1679,18 +1685,29 @@ static void mic_task(void *) {
         int n = (int)(br / sizeof(int32_t));
         if (n <= 0) continue;
 
-        double energy = 0.0;
-        int    cnt    = 0;
+        double energy  = 0.0;
+        int    cnt     = 0;
+        double peakE   = 0.0;                               // sub-frame onset timing:
+        int    peakIdx = 0;                                 // loudest sample in the block
         for (int i = 0; i < n; i += 2) {                   // left slot only (mic data)
             double x = (double)samples[i] / 2147483648.0;  // normalize to ~[-1,1)
             double y = x - xprev + 0.995 * hp;             // DC blocker (high-pass)
             xprev = x; hp = y;
             lp += (y - lp) * alpha;                         // low-pass → kick band
-            energy += lp * lp;
+            double e2 = lp * lp;
+            energy += e2;
+            if (e2 > peakE) { peakE = e2; peakIdx = cnt; }
             cnt++;
         }
         energy /= (cnt > 0 ? cnt : 1);
-        baseline += (energy - baseline) * 0.02;            // slow adaptive floor
+        baseline += (energy - baseline) * 0.01;            // slow adaptive floor (~0.4 s)
+
+        // Sub-frame onset time: timestamp the loudest sample in the block instead of
+        // the read boundary. This beats the read-block quantization (the resolution
+        // floor) — the kick's energy peak is a stable per-beat reference.
+        uint64_t tEnd    = now_us();
+        uint64_t blockUs = (uint64_t)cnt * 1000000ULL / MIC_SAMPLE_RATE;
+        uint64_t tPeak   = tEnd - blockUs + (uint64_t)peakIdx * 1000000ULL / MIC_SAMPLE_RATE;
 
         uint32_t now = now_ms();
 
@@ -1700,11 +1717,11 @@ static void mic_task(void *) {
         double gate         = (double)g_micGate * 1e-5;
         bool onset = (energy > baseline * threshFactor) &&
                      (energy > gate) &&
-                     ((now - lastOnset) > 250);            // refractory → ≤240 BPM
+                     (lastOnsetUs == 0 || (tPeak - lastOnsetUs) > 250000ULL);  // refractory → ≤240 BPM
 
         if (onset) {
-            if (lastOnset != 0) {
-                double interval = (double)(now - lastOnset);
+            if (lastOnsetUs != 0) {
+                double interval = (double)(tPeak - lastOnsetUs) / 1000.0;  // ms, sub-frame precise
                 double bpm = 60000.0 / interval;
                 if (bpm >= 50.0 && bpm <= 220.0) {
                     g_mic_bpm = bpm;                        // raw hint for display
@@ -1719,8 +1736,8 @@ static void mic_task(void *) {
                         double cand = bpm;
                         while (cand > anchor * 1.4) cand *= 0.5;   // fold octaves to anchor
                         while (cand < anchor * 0.7) cand *= 2.0;
-                        double frac = (double)g_micWin / 100.0;
-                        if (fabs(cand - anchor) <= anchor * frac) {
+                        double tol = (double)g_micWin;   // accept window, ± BPM
+                        if (fabs(cand - anchor) <= tol) {
                             // Average the clean ~1-beat interval (EMA) → accurate, continuous
                             // tempo, unbiased (interval domain) and free of the 8 ms grid.
                             if (cand == bpm) {                       // un-folded → true 1-beat
@@ -1767,7 +1784,8 @@ static void mic_task(void *) {
                     }
                 }
             }
-            lastOnset = now;
+            lastOnsetUs = tPeak;
+            lastOnset   = now;   // ms, used only for the lock-timeout below
         }
 
         if (g_mic_locked && (now - lastOnset) > 3500) { g_mic_locked = false; consec = 0; avgInterval = 0.0; }

@@ -16,19 +16,17 @@ tapbox is always on, always listening, and always in sync.
 
 ### The Display
 
-tapbox uses an 8-digit display that shows you everything you need at a glance. In normal operation it looks like this:
+tapbox uses an 8-digit display that shows you everything you need at a glance.
 
-```
-  1 2 0 . 0   3   2
-```
+![Display layout](docs/display.jpg)
 
 Reading left to right:
 
-- **120.0** — the current tempo in BPM, updated in real time when any device in the Link session adjusts it
-- **mode bar** — a single horizontal bar just after the tempo shows which sync mode is active: **top bar = CDJ**, **middle bar = Manual**, **bottom bar = Audio**
-- **3** — which beat of the bar you are on right now (this advances with the music)
-- **C / A** — a lock indicator: `C` when locked to a Pioneer CDJ (CDJ mode), `A` when the microphone has a steady tempo lock (Audio mode); blank when nothing is locked
-- **2** — how many other Link peers are connected to the session
+- **beat** — the current tempo in BPM (`120.0`), updated in real time when any device in the Link session adjusts it
+- **mode bar** — a single horizontal segment just after the tempo shows which sync mode is active: **top = CDJ**, **middle = Manual**, **bottom = Audio**
+- **count** — which beat of the bar you are on right now (advances with the music)
+- **lock dot** — the decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio mode listening but not yet stable; **off** = no lock
+- **peers** — how many other Ableton Link peers are connected to the session
 
 On startup, tapbox joins the existing Link session tempo if one is already running, otherwise it starts at 120 BPM. You can tap a new tempo whenever you are ready.
 
@@ -69,7 +67,7 @@ How to use it:
 1. Switch `node` to `Aud`. The bottom bar lights up. Nothing happens to the tempo yet — the mic is just listening.
 2. Play the music near the microphone.
 3. **Tap once on the beat** to accept the detected tempo and set the downbeat to that moment — or **tap four times** if you want to set the tempo yourself and let the mic refine it from there.
-4. The `A` indicator lights when the mic has a steady lock. From then on the tempo tracks the music automatically; a single tap any time re-aligns the downbeat without changing the tempo.
+4. The beat digit's decimal point **blinks** while the mic is searching for a stable lock, then goes **solid** once locked. From then on the tempo tracks the music automatically; a single tap any time re-aligns the downbeat without changing the tempo.
 
 The detector is tuned for a clear kick drum. Four menu items (`uind`, `SLEu`, `thr`, `gAte`, shown only in Audio mode) fine-tune it — see the technical write-up in `BEAT_DETECTION.md` if you want to understand or adjust them.
 
@@ -193,7 +191,7 @@ The active mode is shown by a bar on the display (top = CDJ, middle = Manual, bo
 
 These four items only appear when `node` is set to `Aud`. They tune the microphone beat detector:
 
-- **`uind`** — accept window: how far (± %) a detected beat may sit from your tapped tempo before it is ignored.
+- **`uind`** — accept window: how far (± BPM, 1–10) a detected beat may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
 - **`SLEu`** — tempo slew: how fast the detected tempo is allowed to move (rate limit), in units of 0.1 %/sec.
 - **`thr`** — onset threshold: how strong a kick must be to count. Higher rejects more false hits.
 - **`gAte`** — noise gate: an absolute signal floor so quiet rooms don't trigger.

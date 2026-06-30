@@ -40,7 +40,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    I2S["I2S read: 128 frames ~8 ms"] --> BP["Band-pass: DC block + low-pass"]
+    I2S["I2S read: 128 frames ~4 ms"] --> BP["Band-pass: DC block + low-pass"]
     BP --> EN["Frame energy = mean of lp squared"]
     EN --> BASE["Adaptive baseline (EMA)"]
     EN --> ONS{"Onset? energy above<br/>baseline×thr AND gate,<br/>AND 250 ms since last"}
@@ -69,18 +69,15 @@ Each stage is explained below.
 ## 3. Capturing audio (I2S)
 
 - Mic: **INMP441** (digital I2S MEMS), `L/R` tied to GND.
-- Sample rate: **16 kHz** — we only care about the kick band (< ~150 Hz), so this
-  is plenty and cheap.
+- Sample rate: **32 kHz** — higher than strictly needed for the kick band, but
+  halves the read-block size for better onset timing resolution.
 - INMP441 channel selection on the ESP32 is a known finicky point (L/R→GND
   *should* select the left slot, but configs don't always behave). In our
   bring-up, **mono mode returned all-zero samples on both slot settings**, while
   reading **both** slots in stereo and using only the **left** samples worked
   reliably — so that's what we do (`i += 2` through the buffer). This is an
   empirical workaround for our setup, not a documented driver bug.
-- Each read returns **256 int32 samples = 128 frames ≈ 8 ms** of audio.
-
-> ⚠️ This **8 ms read block is the resolution floor** of the whole system — see
-> §11. Onsets can only be timestamped at read boundaries.
+- Each read returns **256 int32 samples = 128 frames ≈ 4 ms** of audio.
 
 ---
 
@@ -97,11 +94,11 @@ two-stage IIR filter, then measure its energy.
 ```c
 x  = sample / 2^31;                 // normalize to ~[-1, 1)
 y  = x - xprev + 0.995 * hp;        // DC blocker  (kills sub-bass rumble/offset)
-lp = lp + 0.06 * (y - lp);          // 1-pole low-pass (~150 Hz at 16 kHz)
+lp = lp + 0.03 * (y - lp);          // 1-pole low-pass (~150 Hz at 32 kHz)
 energy += lp * lp;                  // accumulate over the read block
 ```
 
-The result is one **frame energy** value per ~8 ms block: high during a kick,
+The result is one **frame energy** value per ~4 ms block: high during a kick,
 low between kicks.
 
 ---
@@ -189,24 +186,27 @@ while (cand > anchor * 1.4) cand *= 0.5;   // 252 → 126
 while (cand < anchor * 0.7) cand *= 2.0;   //  63 → 126
 ```
 
-**(b) Acceptance window** — after folding, keep only candidates near the anchor:
+**(b) Acceptance window** — after folding, keep only candidates within a fixed
+**± BPM** of the anchor (`uind`, an absolute tolerance so it reads the same at any
+tempo — you can tap to ~±2 BPM, so a few BPM is plenty):
 
 ```c
-if (fabs(cand - anchor) <= anchor * window%)   // default ±10%
+if (fabs(cand - anchor) <= uind_bpm)   // default ±4 BPM
 ```
 
 ```
-                 reject │   accept (±window)   │ reject
-   ───────────────●─────┼──────────●───────────┼─────●───────────► BPM
-                 88     113       126(anchor)  139   ...
-              (folds up        the real kicks       (folds down
-               to ~176,         land here            or rejected)
-               rejected)
+                 reject │  accept (±4 BPM)  │ reject
+   ───────────────●─────┼─────────●─────────┼──────●──────────► BPM
+                 88     122      126        130    141
+              (syncopated      the real kicks       (early hit /
+               hit, folds      land here             harmonic,
+               & rejected)                           rejected)
 ```
 
-A detection like **88.9** (a syncopated hit) folds to ~178 and is rejected; a
-genuine **125 / 128.8** sails through. This is what keeps `trk` rock-steady even
-though the raw stream is full of junk.
+A detection like **88.9** (a syncopated hit) folds to ~178 and is rejected; an
+early-hit stray at **141** is outside the window and rejected; a genuine **125–127**
+sails through. This is what keeps `trk` steady even though the raw stream is full
+of junk.
 
 ---
 
@@ -302,24 +302,29 @@ stateDiagram-v2
 
 - **Display-only**: mic measures but does nothing to Link.
 - **Armed**: tap anchored the tracker; mic is refining tempo.
-- **Locked** (`lock=1`, shown by the `A` indicator + bottom mode bar): stable
+- **Locked** (`lock=1`, shown by solid dot on the beat digit + bottom mode bar): stable
   tempo, phase-lock active.
 - Lock drops after **3.5 s** with no detected onset (a breakdown / silence), then
   re-acquires when the beat returns.
 
 ---
 
-## 12. The resolution floor (and option 3)
+## 12. Resolution floor and sub-frame timing
 
-The single biggest limit is §3's **8 ms read block**: onsets are timestamped to
-that grid, so one interval resolves to ~2 BPM at 126. The EMA + deadband average
-this down to a stable display, but a small residual (~±0.5 BPM and a slight bias)
-remains. Genuinely beating it needs **finer audio framing** — either smaller I2S
-reads or sub-frame interpolation of the threshold crossing — which is the planned
-"option 3" enhancement.
+The raw read block is **~4 ms** at 32 kHz (halved from the original 8 ms by
+raising the sample rate). To go further, onset timestamps are refined to the
+**peak-energy sample within the read block** rather than the block boundary:
 
-Note this is mostly about the **displayed number**: the phase-lock (§10) keeps the
-actual Ableton Link grid glued to the music regardless of that cosmetic wobble.
+```c
+uint64_t tPeak = tEnd - blockUs + (uint64_t)peakIdx * 1000000ULL / MIC_SAMPLE_RATE;
+```
+
+This eliminates the coarse quantisation grid almost entirely. A small residual
+(~±0.5 BPM display wobble) remains from genuine onset jitter in the music and
+room acoustics — this is physical noise, not a firmware limit.
+
+The phase-lock (§10) keeps the actual Ableton Link grid glued to the music
+regardless of that cosmetic wobble.
 
 ---
 
@@ -329,10 +334,10 @@ actual Ableton Link grid glued to the music regardless of that cosmetic wobble.
 |------|----------|---------|--------------|
 | `thr`  | `g_micThr`  | 8 (→1.8×) | onset threshold = baseline × (1 + thr/10). Higher = only strong kicks |
 | `gate` | `g_micGate` | 5 | absolute noise-gate floor (× 1e-5). Higher = ignores quieter signals |
-| `uind` | `g_micWin`  | 10 | acceptance window ± % around the tap anchor. Keep wide enough to admit the natural spread |
+| `uind` | `g_micWin`  | 4 | acceptance window ± BPM around the tap anchor (1–10). Tighter = rejects more strays; also caps how far it follows drift before a re-tap |
 | `SLEu` | `g_micSlew` | 10 | tempo slew limit, in 0.1 %/sec. Higher = follows drift faster but jitters more |
 
-Fixed constants (in `mic_task`): LP α = 0.06, baseline α = 0.02, refractory =
+Fixed constants (in `mic_task`): LP α = 0.03, baseline α = 0.02, refractory =
 250 ms, interval EMA α = 0.08, deadband = 0.4 BPM, clamp = ±20 %, PLL gain = 0.15,
 lock = 4 beats, lock timeout = 3.5 s.
 
@@ -345,5 +350,5 @@ lock = 4 beats, lock timeout = 3.5 s.
 | I2S init (stereo, left slot) | `init_i2s_mic()` |
 | Capture → band-pass → onset → tracking → phase-lock | `mic_task()` |
 | Tap grammar (arm / override / re-sync) | `do_tap()` |
-| Mode + lock display (bars, `A` indicator) | `update_display()` |
+| Mode + lock display (mode bars, lock dot on beat digit) | `update_display()` |
 | Tuning knobs (menu) | `MENU_MTHR / MGATE / MWIN / MSLEW` |
