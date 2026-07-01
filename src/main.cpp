@@ -193,6 +193,11 @@ static int menuItem    = 0;
 static int menuEditVal = 0;
 static int menuSubItem = 0;  // active octet (0–3) when in sub-menu
 
+// Snapshot of network config taken on menu entry; compared on exit so we
+// reboot exactly once if anything network-related actually changed.
+static int g_net_snap = 0;
+static int g_ip_snap[4], g_sn_snap[4], g_gt_snap[4];
+
 // ── Time helpers ───────────────────────────────────────────────────────────────
 static inline uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
 static inline uint64_t now_us() { return (uint64_t)esp_timer_get_time(); }
@@ -1096,10 +1101,28 @@ static void go_live(double bpm, uint32_t sessionStartMs) {
 
 // ── Input ──────────────────────────────────────────────────────────────────────
 
+static void capture_net_snapshot() {
+    g_net_snap = g_net;
+    for (int i = 0; i < 4; i++) {
+        g_ip_snap[i] = g_ip[i];
+        g_sn_snap[i] = g_sn[i];
+        g_gt_snap[i] = g_gt[i];
+    }
+}
+
+static bool net_config_changed() {
+    if (g_net != g_net_snap) return true;
+    for (int i = 0; i < 4; i++)
+        if (g_ip[i] != g_ip_snap[i] || g_sn[i] != g_sn_snap[i] || g_gt[i] != g_gt_snap[i])
+            return true;
+    return false;
+}
+
 static void exit_menu() {
     if (appMode == MODE_MENU_EDIT && menuItem == MENU_BRIT)
         display.setIntensity(kBritLevels[g_brit]);
     appMode = MODE_NORMAL;
+    if (net_config_changed()) show_boot_reboot();  // one reboot to apply net changes
 }
 
 static double current_link_bpm() {
@@ -1254,6 +1277,7 @@ static void on_select_short_press() {
     uint32_t now = now_ms();
     switch (appMode) {
         case MODE_NORMAL:
+            capture_net_snapshot();
             appMode       = MODE_MENU_NAV;
             menuEnteredAt = now;
             break;
@@ -1263,10 +1287,24 @@ static void on_select_short_press() {
             } else if (menuItem == MENU_VER) {
                 menuEnteredAt = now;
             } else if (menuItem == MENU_CURIP) {
-                const char *ip = ethConnected                       ? ethIPStr      :
-                                 (g_wifi_enabled && !g_wifi_as_ap) ? g_wifi_ip_str :
-                                 g_wifi_as_ap                      ? "192.168.4.1" : "0.0.0.0";
-                start_scroll_splash(nullptr, 0, ip);
+                // Prefix the scroll with the active interface, matching the boot
+                // splash labels: Eth / StA (WiFi station) / AP.
+                static const uint8_t kEth[] = { CH_e, CH_t, CH_h };
+                static const uint8_t kSta[] = { CH_S, CH_t, CH_A };
+                static const uint8_t kAp[]  = { CH_A, CH_P };
+                const uint8_t *label = nullptr;
+                int label_len = 0;
+                const char *ip;
+                if (ethConnected) {
+                    label = kEth; label_len = 3; ip = ethIPStr;
+                } else if (g_wifi_enabled && !g_wifi_as_ap) {
+                    label = kSta; label_len = 3; ip = g_wifi_ip_str;
+                } else if (g_wifi_as_ap) {
+                    label = kAp;  label_len = 2; ip = "192.168.4.1";
+                } else {
+                    ip = "0.0.0.0";  // disconnected: no interface label
+                }
+                start_scroll_splash(label, label_len, ip);
                 menuEnteredAt = now;
             } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
                 menuSubItem   = 0;
@@ -1279,11 +1317,11 @@ static void on_select_short_press() {
             }
             break;
         case MODE_MENU_EDIT: {
-            bool netChanged = (menuItem == MENU_NET && menuEditVal != g_net);
+            // Network changes reboot once on menu exit (see exit_menu /
+            // check_menu_timeout), so mode edits just commit here.
             menu_commit(menuItem, menuEditVal);
             apply_settings();
             nvs_save_settings();
-            if (netChanged) show_boot_reboot();
             appMode       = MODE_MENU_NAV;
             menuEnteredAt = now;
             break;
@@ -1358,6 +1396,7 @@ static void check_menu_timeout() {
         nvs_save_settings();  // save confirmed octets on timeout
     if (menuItem == MENU_DONE) menuItem = 0;
     appMode = MODE_NORMAL;
+    if (net_config_changed()) show_boot_reboot();  // one reboot to apply net changes
 }
 
 // Both-button hold combo: 3 s → OTA pending + reboot; 8 s → factory reset confirm
