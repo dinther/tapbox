@@ -98,7 +98,7 @@ tapbox can connect to your WiFi network and run Ableton Link over it. This is us
 3. Connect your phone or laptop to the **tapbox** network.
 4. Open **http://192.168.4.1** in your browser.
 5. Enter your WiFi network name (SSID) and password. The SSID field is case-sensitive — copy it exactly from your phone's WiFi list.
-6. Tap **Save Network — tapbox will reboot**. The device saves the credentials and reboots, then connects to your network as a WiFi client and scrolls `SSID` followed by the assigned IP address.
+6. Tap **Save Network — tapbox will reboot**. The device saves the credentials and reboots, then connects to your network as a WiFi client and scrolls `StA` followed by the assigned IP address.
 
 #### Changing WiFi credentials later
 
@@ -193,8 +193,8 @@ These four items only appear when `node` is set to `Aud`. They tune the micropho
 
 - **`uind`** — accept window: how far (± BPM, 1–10) a detected beat may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
 - **`SLEu`** — tempo slew: how fast the detected tempo is allowed to move (rate limit), in units of 0.1 %/sec.
-- **`thr`** — onset threshold: how strong a kick must be to count. Higher rejects more false hits.
-- **`gAte`** — noise gate: an absolute signal floor so quiet rooms don't trigger.
+- **`thr`** — onset threshold: how much a kick must stand out to count. Higher rejects more false hits.
+- **`gAte`** — noise gate: an absolute loudness floor (range 0–50). A sound has to be at least this loud to count as a beat at all, no matter what else is happening.
 
 The defaults work for typical four-on-the-floor material. For the full explanation of what each does and how to dial them in, see `BEAT_DETECTION.md`.
 
@@ -295,22 +295,15 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 
 ---
 
-## Madmapper settings
+## App Integration Guides
 
-### Ableton Link
+tapbox works with any Ableton Link or OSC-capable application. Setup guides for specific apps live in their own documents:
 
-Ableton Link support is built into MadMapper. It is as simple as (1), turning on "Ableton Link" on the Master tab iunder Global BPM. MadMapper acts by defaut as a slave in the Ableton Link session, however, it is possible to control the BPM of the Ableton Link session directly by turning on (2) "Enable Setting BPM".
+- **MadMapper** — see [`MADMAPPER.md`](MADMAPPER.md) for Ableton Link and OSC setup.
 
-Assuming tapbox is turned on and correctly connected, the Peers field (3) should at least show one.The peer count is heigher if there are other Ableton Link enabled programs somewhere on the network.
+More app guides will be added over time.
 
-You can read the current BPM in the BPM field (4). If "Enable Setting BPM" is turned on then you can adjust the Ableton Link BPM with the BPM slider.
-
-![Display layout](docs/tapbox_madmapper_master_ableton.png)
-
-### Send OSC
-
-MadMapper has OSC modules designed to send OSC commands. These can be used to send specific OSC commands to tapbox. Details of these commands can be found in the OSC section. To start we need to tell MadMapper where the tapbox OSC server resides.
-(note: when you use Lan
+---
 
 ## Tips and Tricks
 

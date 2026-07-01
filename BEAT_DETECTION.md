@@ -133,7 +133,23 @@ energy
 
 - `threshFactor = 1 + thr/10` (the `thr` menu knob). Higher → only strong kicks
   count, fewer false triggers.
-- `gate` is an absolute floor (the `gate` knob) so silence/room noise never locks.
+- `gate` is an absolute floor (the `gate` knob, `energy > g_micGate × 1e-5`) so
+  silence/room noise never locks. It sits *alongside* the relative `thr` test —
+  `thr` asks "does this stand out above the running average?", `gate` asks "is
+  this loud enough in absolute terms to bother with?", and an onset must clear
+  **both**. This matters because the baseline is adaptive: in a near-silent room
+  the average collapses to almost nothing, so tiny hum, hiss, or handling noise
+  can satisfy `baseline × thr` on its own. The fixed `gate` is what stops that.
+  - **Low (toward 0):** floor effectively off — only `thr` applies. Best for
+    quiet sources, but a quiet room can self-trigger on ambient noise.
+  - **High:** ignores quiet passages, room noise, and crosstalk (steadier
+    locking in a loud, bass-heavy room); set it too high and genuine but quieter
+    kicks fall below the floor, so beats get missed and it may never lock.
+  - **Dialling it in:** raise `gate` if a quiet room self-triggers, lower it if
+    real beats are missed. The `mic e=` (energy) line in the serial log during
+    Audio mode shows both the room's idle level and the kick peaks — pick a value
+    between them. Note the log prints `gate` pre-scaled as `g_micGate × 10`
+    (i.e. `energy × 1e6` units), so the default `5` reads as `gate=50`.
 - The **250 ms refractory** stops a single kick's ringing or a snare from
   double-triggering.
 
