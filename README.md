@@ -17,7 +17,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 - **Pioneer CDJ sync** — passively listens for Pro DJ Link beat packets on the same network; bridges CDJ tempo directly into the Ableton Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
-- **Ethernet or WiFi** — Connects to your network as a client; browser config page for credentials; auto-failover to Wifi if no Ethernet present.
+- **Ethernet or WiFi** — Connects to your network as a client; browser config page for credentials; auto-failover to WiFi if no Ethernet present. Can also run as a **WiFi access point** or with a **direct Ethernet cable** to a laptop — no router needed.
 - **Static or DHCP** — configure IP address, subnet, and gateway via menu
 - **IP ticker on boot** — non-blocking scroll of connection type and IP address at startup (`Eth`, `SSID`, or `AP`); device is fully operational during the scroll
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
@@ -92,7 +92,8 @@ Value flashes at 4 Hz in edit mode.
 | `SLEu` | Mic tempo slew | rate limit, 0.1 %/sec units (Audio mode only) |
 | `thr ` | Mic onset threshold | sensitivity to kicks (Audio mode only) |
 | `gAte` | Mic noise gate | absolute signal floor (Audio mode only) |
-| `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) |
+| `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) · `  AP` (WiFi access point) |
+| `Addr` | Current IP address | read-only; shows last octet; press **select** to scroll full IP across display |
 | `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
 | `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |
 | `Hub.` | Gateway | sub-menu: Oct1–Oct4, 0–255 each |
@@ -101,6 +102,7 @@ Value flashes at 4 Hz in edit mode.
 
 `node` selects the sync mode. The four mic-tuning items (`uind`, `SLEu`, `thr`, `gAte`) are **only shown when mode is `Aud`** — they tune the audio beat detector (see [BEAT_DETECTION.md](BEAT_DETECTION.md)).  
 `IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
+`Addr` is read-only. Navigating to it shows the last octet of the current IP as a quick reference; pressing **select** scrolls the full IP address across the display.  
 Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
 
 > Factory reset and OTA update are **not** in the menu — see [System Functions](#system-functions) below.
@@ -132,6 +134,53 @@ tapbox prefers Ethernet. WiFi is used automatically when no Ethernet cable is pr
 The ESP32 radio supports **2.4 GHz only**. If your router broadcasts separate 2.4 GHz and 5 GHz SSIDs, use the 2.4 GHz one.
 
 If WiFi credentials are stored but the connection fails, tapbox falls back to AP mode automatically so you can reconfigure without a factory reset.
+
+## Direct Connection — No Network Required
+
+tapbox can sync with a laptop running Ableton Live (or any Link-enabled app) without a router or existing network. Two approaches work.
+
+### WiFi AP mode
+
+The simplest option — tapbox creates its own open WiFi network and everything runs on it.
+
+1. In the menu, navigate to `Lan.` and set it to `  AP`. Confirm with select — tapbox reboots.
+2. On your laptop, connect to the **tapbox** WiFi network (open, no password).
+3. Ableton Link is active immediately. Tap to set tempo and phase as usual.
+4. The web config page is at **http://192.168.4.1** for display and network settings.
+5. OSC commands reach tapbox at **192.168.4.1 port 8000**.
+
+> OTA firmware updates are not available in AP mode (no internet path). CDJ sync is also unavailable — Pioneer players use a wired network and do not join a WiFi access point.
+
+### Direct Ethernet
+
+A single cable from tapbox to a laptop Ethernet port, with both ends set to a static IP. This gives the most stable connection and keeps the laptop's WiFi free for internet.
+
+Modern hardware (including the WT32-ETH01 and USB-to-Ethernet adapters) supports auto-MDIX, so a standard patch cable works — no crossover cable is required.
+
+**tapbox — set a static IP:**
+
+1. In the menu, set `Lan.` to `Stat`.
+2. Set `IP`, `Sub.`, and `Hub.` via their sub-menus. Use a private range that is not in use on any other interface — for example:
+
+   | Setting | Example |
+   |---------|---------|
+   | `IP  ` | `192.168.10.1` |
+   | `Sub.` | `255.255.255.0` |
+   | `Hub.` | `192.168.10.1` |
+
+3. Connect the cable. tapbox boots straight to its static address with no DHCP wait.
+
+**Laptop — set the Ethernet adapter to a static IP on the same subnet:**
+
+| Setting | Example |
+|---------|---------|
+| IP address | `192.168.10.2` |
+| Subnet mask | `255.255.255.0` |
+| Default gateway | `192.168.10.1` *(or blank)* |
+
+The web config page is at **http://192.168.10.1**. Ableton Link and OSC work on the same address. The laptop's WiFi can remain connected to the internet independently.
+
+> Do not set the laptop gateway to an address outside the tapbox subnet — it will cause routing errors on that interface. Leaving the gateway blank or pointing it at the tapbox IP is safe.
 
 ## Web Configuration
 

@@ -76,8 +76,8 @@ static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 7
-#define FW_PATCH 2
+#define FW_MINOR 8
+#define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -166,12 +166,8 @@ static bool g_wifi_as_ap   = false;
 static bool g_wifi_got_ip  = false;
 static bool g_eth_got_ip   = false;
 static bool g_eth_lost     = false;
-
-// ── Non-blocking AP scroll (continuous, looping) ──────────────────────────────
-static uint8_t  s_ap_buf[32] = {};
-static int      s_ap_len     = 0;
-static int      s_ap_offset  = -7;
-static uint32_t s_ap_step_ms = 0;
+static bool g_ap_started   = false;
+static char g_wifi_ip_str[16] = {};
 
 // ── Non-blocking one-shot scroll (boot/reconnect IP splash) ───────────────────
 static uint8_t  s_scroll_buf[48]  = {};
@@ -189,9 +185,9 @@ static uint32_t menuEnteredAt = 0;
 enum MenuIdx {
     MENU_SIG = 0, MENU_ACC, MENU_BRIT, MENU_MODE,
     MENU_MWIN, MENU_MSLEW, MENU_MTHR, MENU_MGATE,
-    MENU_NET, MENU_IP, MENU_SN, MENU_GT,
+    MENU_NET, MENU_CURIP, MENU_IP, MENU_SN, MENU_GT,
     MENU_RESET, MENU_VER, MENU_DONE,
-    MENU_COUNT  // 15
+    MENU_COUNT  // 16
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
@@ -243,7 +239,7 @@ static void nvs_load_settings() {
     if (nvs_get_i32(h, "mslew",&v) == ESP_OK && v >= 0 && v <= 50)         g_micSlew  = (int)v;
     if (nvs_get_i32(h, "mthr", &v) == ESP_OK && v >= 0 && v <= 30)         g_micThr   = (int)v;
     if (nvs_get_i32(h, "mgate",&v) == ESP_OK && v >= 0 && v <= 50)         g_micGate  = (int)v;
-    if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 1)          g_net      = (int)v;
+    if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 2)          g_net      = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]    = (int)v;
     if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]    = (int)v;
     if (nvs_get_i32(h, "ip2",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[2]    = (int)v;
@@ -339,6 +335,13 @@ static int menu_get_val(int item) {
         case MENU_MTHR:  return g_micThr;
         case MENU_MGATE: return g_micGate;
         case MENU_NET:   return g_net;
+        case MENU_CURIP: {
+            const char *ip = ethConnected                       ? ethIPStr       :
+                             (g_wifi_enabled && !g_wifi_as_ap) ? g_wifi_ip_str  :
+                             g_wifi_as_ap                      ? "192.168.4.1"  : "0.0.0.0";
+            const char *p = strrchr(ip, '.');
+            return p ? atoi(p + 1) : 0;
+        }
         default: return 0;
     }
 }
@@ -355,7 +358,7 @@ static int menu_val_max(int item) {
         case MENU_MSLEW: return 50;
         case MENU_MTHR:  return 30;
         case MENU_MGATE: return 50;
-        case MENU_NET:   return 1;
+        case MENU_NET:   return 2;
         default: return 0;
     }
 }
@@ -391,6 +394,7 @@ static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_t, CH_h, CH_r, MAX7219Display::SEG_BLANK                  },  // thr  (mic threshold)
     { CH_g, CH_A, CH_t, CH_e                                       },  // gAte (mic noise gate)
     { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
+    { CH_A, CH_d, CH_d, CH_r                                               },  // Addr (current IP)
     { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
     { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
     { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
@@ -432,9 +436,15 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             // 4-char value fills positions 4-7, overriding the blank separator
             if (val == 0) {
                 segs[4] = CH_A; segs[5] = CH_u; segs[6] = CH_t; segs[7] = CH_o;
-            } else {
+            } else if (val == 1) {
                 segs[4] = CH_S; segs[5] = CH_t; segs[6] = CH_a; segs[7] = CH_t;
+            } else {
+                segs[4] = segs[5] = MAX7219Display::SEG_BLANK;
+                segs[6] = CH_A; segs[7] = CH_P;
             }
+            break;
+        case MENU_CURIP:
+            render_int3(segs, val);
             break;
         case MENU_IP: case MENU_SN: case MENU_GT:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
@@ -472,19 +482,6 @@ static void update_display() {
             }
             display.setSegments(segs);
             if (++s_scroll_offset > s_scroll_len) s_scroll_active = false;
-        }
-        return;
-    }
-
-    if (appMode == MODE_NORMAL && g_wifi_as_ap) {
-        if (now - s_ap_step_ms >= 500) {
-            s_ap_step_ms = now;
-            for (int d = 0; d < 8; d++) {
-                int idx = s_ap_offset + d;
-                segs[d] = (idx >= 0 && idx < s_ap_len) ? s_ap_buf[idx] : MAX7219Display::SEG_BLANK;
-            }
-            display.setSegments(segs);
-            if (++s_ap_offset > s_ap_len) s_ap_offset = -7;
         }
         return;
     }
@@ -696,26 +693,11 @@ static void start_scroll_splash(const uint8_t *label_segs, int label_len, const 
     s_scroll_active = true;
 }
 
-static void ap_scroll_init() {
-    s_ap_len    = 0;
-    s_ap_offset = -7;
-    s_ap_step_ms = 0;
-    const char *label = "AP";
-    const char *ip    = "192.168.4.1";
-    for (int i = 0; label[i] && s_ap_len < 30; i++)
-        s_ap_buf[s_ap_len++] = char_to_seg(label[i]);
-    s_ap_buf[s_ap_len++] = MAX7219Display::SEG_BLANK;
-    for (int i = 0; ip[i] && s_ap_len < 31; i++) {
-        if (ip[i] == '.') s_ap_buf[s_ap_len++] = MAX7219Display::SEG_BLANK;
-        else               s_ap_buf[s_ap_len++] = char_to_seg(ip[i]);
-    }
-}
 
 // ── WiFi & HTTP config server ──────────────────────────────────────────────────
 
 static bool           s_wifi_joined      = false;
 static bool           g_sta_failed       = false;
-static char           g_wifi_ip_str[16]  = {};
 static bool           g_wifi_initialized = false;
 static esp_netif_t   *s_ap_netif         = nullptr;
 static esp_netif_t   *s_sta_netif        = nullptr;
@@ -1038,7 +1020,7 @@ static void wifi_start_ap() {
     g_wifi_enabled = true;
     g_wifi_as_ap   = true;
     s_wifi_joined  = false;
-    ap_scroll_init();
+    g_ap_started   = true;
     printf("WiFi AP: tapbox (open) — config at 192.168.4.1\n");
 }
 
@@ -1071,8 +1053,8 @@ static void wifi_stop() {
 
 // Credentials already loaded into g_wifi_ssid/g_wifi_pass by nvs_load_settings() at boot.
 static void wifi_init() {
-    if (g_wifi_ssid[0] == '\0') wifi_start_ap();
-    else                        wifi_start_sta();
+    if (g_net == 2 || g_wifi_ssid[0] == '\0') wifi_start_ap();
+    else                                        wifi_start_sta();
 }
 
 
@@ -1102,7 +1084,6 @@ static void reset_downbeat() {
 }
 
 static void go_live(double bpm, uint32_t sessionStartMs) {
-    if (g_wifi_as_ap) return;
     abl_link_enable(s_link, true);
     linkEnabled = true;
     uint64_t linkNow    = now_us();
@@ -1280,6 +1261,12 @@ static void on_select_short_press() {
             if (menuItem == MENU_DONE) {
                 exit_menu();
             } else if (menuItem == MENU_VER) {
+                menuEnteredAt = now;
+            } else if (menuItem == MENU_CURIP) {
+                const char *ip = ethConnected                       ? ethIPStr      :
+                                 (g_wifi_enabled && !g_wifi_as_ap) ? g_wifi_ip_str :
+                                 g_wifi_as_ap                      ? "192.168.4.1" : "0.0.0.0";
+                start_scroll_splash(nullptr, 0, ip);
                 menuEnteredAt = now;
             } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
                 menuSubItem   = 0;
@@ -1849,18 +1836,20 @@ extern "C" void app_main(void) {
     }
     if (ota_pending) nvs_save_ota_pending(false);  // clear flag immediately
 
-    initEthernet(g_net, g_ip, g_sn, g_gt);
+    if (g_net != 2) {
+        initEthernet(g_net, g_ip, g_sn, g_gt);
 
-    // Static IP only needs link-up (~2 s); DHCP needs IP assignment (~5 s).
-    uint32_t eth_timeout = (g_net == 1) ? 3000 : 5000;
-    printf("Waiting for Ethernet");
-    uint32_t start = now_ms();
-    while (!ethConnected && (now_ms() - start) < eth_timeout) {
-        vTaskDelay(pdMS_TO_TICKS(250));
-        printf(".");
-        fflush(stdout);
+        // Static IP only needs link-up (~2 s); DHCP needs IP assignment (~5 s).
+        uint32_t eth_timeout = (g_net == 1) ? 3000 : 5000;
+        printf("Waiting for Ethernet");
+        uint32_t start = now_ms();
+        while (!ethConnected && (now_ms() - start) < eth_timeout) {
+            vTaskDelay(pdMS_TO_TICKS(250));
+            printf(".");
+            fflush(stdout);
+        }
+        printf("\n");
     }
-    printf("\n");
 
     if (!ethConnected) wifi_init();
 
@@ -1939,6 +1928,15 @@ extern "C" void app_main(void) {
             printf("Link re-enabled on Ethernet interface\n");
             if (ota_pending) { ota_pending = false; perform_ota(); }
             else { static const uint8_t kEth[] = { CH_e, CH_t, CH_h }; start_scroll_splash(kEth, 3, ethIPStr); }
+        }
+        if (g_ap_started) {
+            g_ap_started = false;
+            abl_link_enable(s_link, false);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            abl_link_enable(s_link, true);
+            linkEnabled = true;
+            static const uint8_t kAp[] = { CH_A, CH_P };
+            start_scroll_splash(kAp, 2, "192.168.4.1");
         }
         update_display();
         print_status();
