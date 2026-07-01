@@ -184,6 +184,8 @@ The web config page is at **http://192.168.10.1**. Ableton Link and OSC work on 
 
 ## Web Configuration
 
+<img width="50%" alt="Web configuration page" src="docs/web_config.jpg" />
+
 The config page at `http://<tapbox-ip>` is accessible from any browser over Ethernet or WiFi. It has two sections:
 
 | Section | Fields | Button | Effect |
