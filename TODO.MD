@@ -1,0 +1,9 @@
+- Wifi addresses can not be set to fixed
+- Add all parameters in the web config page
+- AP needs password
+- consider to hide highly technical parameters in the web config page
+- nudge amount param can go. Instead allow the nudge value to be sent via OSC (check with claude)
+- node for Sync Mode.... really? And why CDJ as default?
+- uind is a very sad attempt to get "Wind" use another word
+- isn't wind and slew the same? ask
+- showing addr long select exit causes a boot.
