@@ -36,7 +36,7 @@ tapbox has two buttons:
 
 **Tap button** — the main button. Tap it in time with your music to set the tempo. A single tap immediately defines the downbeat (first beat of the bar). Three more taps locks in the tempo. In the menu, pressing tap moves to the next item or increments a value — hold it to auto-increment.
 
-**Select button** — the confirm button. A short press enters the menu from normal mode, steps into an edit field, or confirms a value. Hold it for one second to go back or exit the menu. When `UPd SurE` or `rSEt SurE` is showing, a short press of select confirms the action; press tap or hold select for 1 second to cancel.
+**Select button** — the confirm button. A short press enters the menu from normal mode, steps into an edit field, or confirms a value. Hold it for one second to go back or exit the menu. Hold select for 1 second to cancel.
 
 ---
 
