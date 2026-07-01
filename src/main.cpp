@@ -49,13 +49,9 @@ static constexpr uint8_t CH_a = 0x7D;
 static constexpr uint8_t CH_A = 0x77;
 static constexpr uint8_t CH_b = 0x1F;
 static constexpr uint8_t CH_B = 0x7F;
-static constexpr uint8_t CH_c = 0x0D;
 static constexpr uint8_t CH_d = 0x3D;
 static constexpr uint8_t CH_e = 0x6F;
-static constexpr uint8_t CH_g = 0x7B;
 static constexpr uint8_t CH_h = 0x17;
-static constexpr uint8_t CH_H = 0x37;
-static constexpr uint8_t CH_i = 0x10;
 static constexpr uint8_t CH_I = 0x30;
 static constexpr uint8_t CH_L = 0x0E;
 static constexpr uint8_t CH_o = 0x1D;
@@ -76,15 +72,14 @@ static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 8
-#define FW_PATCH 4
+#define FW_MINOR 9
+#define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
 static const int    kSigCount     = 6;
 
-static const int    kNudgeMs[]    = { 50, 20, 5 };
-static const int    kNudgeCount   = 3;
+#define DEFAULT_NUDGE_MS 20  // used by OSC /nudge when no argument is given
 
 static const int    kBritLevels[] = { 1, 5, 10, 15 };  // user levels 1-4 → MAX7219 intensity
 static const int    kBritCount    = 4;
@@ -94,10 +89,9 @@ enum SyncMode { MODE_CDJ = 0, MODE_AUDIO = 1, MODE_MANUAL = 2 };
 
 // ── Persistent settings ────────────────────────────────────────────────────────
 static int g_sigIdx   = 2;             // kSignatures[2] = 4/4
-static int g_nudgeIdx = 1;             // kNudgeMs[1] = 20 ms
 static int g_brit     = 1;             // brightness level index 0–3 (→ kBritLevels)
 static int g_net      = 0;             // 0=DHCP, 1=static
-static int g_mode     = MODE_CDJ;      // 0=CDJ, 1=Audio (mic), 2=Manual
+static int g_mode     = MODE_AUDIO;    // 0=CDJ, 1=Audio (mic), 2=Manual
 // Mic / beat-detection tuning knobs (live-adjustable while tuning; folded into a
 // preset later). See [[project-inmp441-plan]].
 static int g_micWin   = 4;             // beat-accept window, ± BPM around tapped tempo (1–10)
@@ -114,16 +108,13 @@ static char g_wifi_pass[64] = {};
 //    settings if NVS is erased on the boot following an OTA update. ────────────
 struct RtcSettings {
     uint32_t magic;
-    int sigIdx, nudgeIdx, brit, net, mode;
+    int sigIdx, brit, net, mode;
     int micWin, micSlew, micThr, micGate;
     int ip[4], sn[4], gt[4];
     char wifi_ssid[64], wifi_pass[64];
 };
 static constexpr uint32_t RTC_MAGIC = 0xCAFEB00B;
 RTC_DATA_ATTR static RtcSettings s_rtc;
-
-// ── Runtime values derived from settings ──────────────────────────────────────
-static int g_nudgeUs = 20000;
 
 // ── Core globals ───────────────────────────────────────────────────────────────
 static TapTempo                  tapTempo;
@@ -178,25 +169,25 @@ static bool     s_scroll_active   = false;
 
 // ── Menu state ─────────────────────────────────────────────────────────────────
 enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
-               MODE_OTA_CONFIRM, MODE_SUBMENU_NAV, MODE_SUBMENU_EDIT };
+               MODE_OTA_CONFIRM };
 static AppMode  appMode       = MODE_NORMAL;
 static uint32_t menuEnteredAt = 0;
 
+// Mic tuning (uind/SLEu/thr/gAte) and static-IP octets (IP/Sub./Hub.) are
+// configured on the web page only — see http_get_root(). The on-device menu
+// only carries settings usable without a browser at hand.
 enum MenuIdx {
-    MENU_SIG = 0, MENU_ACC, MENU_BRIT, MENU_MODE,
-    MENU_MWIN, MENU_MSLEW, MENU_MTHR, MENU_MGATE,
-    MENU_NET, MENU_CURIP, MENU_IP, MENU_SN, MENU_GT,
+    MENU_SIG = 0, MENU_BRIT, MENU_MODE,
+    MENU_NET, MENU_CURIP,
     MENU_RESET, MENU_VER, MENU_DONE,
-    MENU_COUNT  // 16
+    MENU_COUNT  // 8
 };
 static int menuItem    = 0;
 static int menuEditVal = 0;
-static int menuSubItem = 0;  // active octet (0–3) when in sub-menu
 
 // Snapshot of network config taken on menu entry; compared on exit so we
-// reboot exactly once if anything network-related actually changed.
+// reboot exactly once if the Lan. mode actually changed.
 static int g_net_snap = 0;
-static int g_ip_snap[4], g_sn_snap[4], g_gt_snap[4];
 
 // ── Time helpers ───────────────────────────────────────────────────────────────
 static inline uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
@@ -225,7 +216,6 @@ static void eth_connected_cb(void *, esp_event_base_t, int32_t, void *) {
 
 static void apply_settings() {
     linkQuantum = kSignatures[g_sigIdx];
-    g_nudgeUs   = kNudgeMs[g_nudgeIdx] * 1000;
     display.setIntensity(kBritLevels[g_brit]);
 }
 
@@ -237,7 +227,6 @@ static void nvs_load_settings() {
     }
     int32_t v;
     if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx   = (int)v;
-    if (nvs_get_i32(h, "nud",  &v) == ESP_OK && v >= 0 && v < kNudgeCount) g_nudgeIdx = (int)v;
     if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 0 && v <= 3)          g_brit     = (int)v;
     if (nvs_get_i32(h, "mode", &v) == ESP_OK && v >= 0 && v <= 2)          g_mode     = (int)v;
     if (nvs_get_i32(h, "mwin", &v) == ESP_OK && v >= 0 && v <= 10)         g_micWin   = (int)v;
@@ -269,7 +258,6 @@ static void nvs_save_settings() {
     nvs_handle_t h;
     if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_i32(h, "sig",  (int32_t)g_sigIdx);
-    nvs_set_i32(h, "nud",  (int32_t)g_nudgeIdx);
     nvs_set_i32(h, "brit", (int32_t)g_brit);
     nvs_set_i32(h, "mode", (int32_t)g_mode);
     nvs_set_i32(h, "mwin", (int32_t)g_micWin);
@@ -294,7 +282,7 @@ static void nvs_save_settings() {
 }
 
 static void factory_reset() {
-    g_sigIdx = 2; g_nudgeIdx = 1; g_brit = 1; g_mode = MODE_CDJ;
+    g_sigIdx = 2; g_brit = 1; g_mode = MODE_AUDIO;
     g_micWin = 4; g_micSlew = 10; g_micThr = 8; g_micGate = 5;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
@@ -321,24 +309,14 @@ static void factory_reset() {
 // ── Menu value helpers ─────────────────────────────────────────────────────────
 
 static bool menu_item_visible(int item) {
-    if (item == MENU_RESET) return false;
-    // Mic tuning knobs only matter in Audio mode
-    if (item == MENU_MWIN || item == MENU_MSLEW || item == MENU_MTHR || item == MENU_MGATE)
-        return g_mode == MODE_AUDIO;
-    if (item == MENU_IP || item == MENU_SN || item == MENU_GT) return g_net == 1;
-    return true;
+    return item != MENU_RESET;
 }
 
 static int menu_get_val(int item) {
     switch (item) {
         case MENU_SIG:   return g_sigIdx;
-        case MENU_ACC:   return g_nudgeIdx;
         case MENU_BRIT:  return g_brit;
         case MENU_MODE:  return g_mode;
-        case MENU_MWIN:  return g_micWin;
-        case MENU_MSLEW: return g_micSlew;
-        case MENU_MTHR:  return g_micThr;
-        case MENU_MGATE: return g_micGate;
         case MENU_NET:   return g_net;
         case MENU_CURIP: {
             const char *ip = ethConnected                       ? ethIPStr       :
@@ -356,13 +334,8 @@ static int menu_val_min(int item) { (void)item; return 0; }
 static int menu_val_max(int item) {
     switch (item) {
         case MENU_SIG:   return kSigCount - 1;
-        case MENU_ACC:   return kNudgeCount - 1;
         case MENU_BRIT:  return kBritCount - 1;
         case MENU_MODE:  return 2;
-        case MENU_MWIN:  return 10;
-        case MENU_MSLEW: return 50;
-        case MENU_MTHR:  return 30;
-        case MENU_MGATE: return 50;
         case MENU_NET:   return 2;
         default: return 0;
     }
@@ -371,19 +344,10 @@ static int menu_val_max(int item) {
 static void menu_commit(int item, int val) {
     switch (item) {
         case MENU_SIG:   g_sigIdx   = val; break;
-        case MENU_ACC:   g_nudgeIdx = val; break;
         case MENU_BRIT:  g_brit     = val; break;
         case MENU_MODE:  g_mode     = val; break;
-        case MENU_MWIN:  g_micWin   = val; break;
-        case MENU_MSLEW: g_micSlew  = val; break;
-        case MENU_MTHR:  g_micThr   = val; break;
-        case MENU_MGATE: g_micGate  = val; break;
         case MENU_NET:   g_net      = val; break;
     }
-}
-
-static int *submenu_array() {
-    return (menuItem == MENU_IP) ? g_ip : (menuItem == MENU_SN) ? g_sn : g_gt;
 }
 
 // ── Display ────────────────────────────────────────────────────────────────────
@@ -391,18 +355,10 @@ static int *submenu_array() {
 // Digit segment bytes for use in static label arrays: 0=0x7E 1=0x30 2=0x6D 3=0x79 4=0x33
 static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_B, CH_e, CH_a, CH_t                                       },  // Beat
-    { CH_n, CH_u, CH_d, MAX7219Display::SEG_BLANK                  },  // nud
     { CH_L, CH_e, CH_d, MAX7219Display::SEG_BLANK                  },  // Led
     { CH_n, CH_o, CH_d, CH_e                                       },  // node (mode)
-    { CH_u, CH_i, CH_n, CH_d                                       },  // uind (mic window)
-    { CH_S, CH_L, CH_e, CH_u                                       },  // SLEu (mic slew)
-    { CH_t, CH_h, CH_r, MAX7219Display::SEG_BLANK                  },  // thr  (mic threshold)
-    { CH_g, CH_A, CH_t, CH_e                                       },  // gAte (mic noise gate)
     { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
     { CH_A, CH_d, CH_d, CH_r                                               },  // Addr (current IP)
-    { CH_I, CH_P, MAX7219Display::SEG_BLANK, MAX7219Display::SEG_BLANK     },  // IP
-    { CH_S, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Sub.
-    { CH_H, CH_u, CH_b | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Hub.
     { CH_r, CH_S, CH_e, CH_t                                       },  // rSet
     { CH_u, CH_e, CH_r, MAX7219Display::SEG_BLANK                  },  // vEr  (CH_u renders as 'v')
     { CH_d, CH_o, CH_n, CH_e                                       },  // done
@@ -421,9 +377,6 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             segs[5] = segs[6] = MAX7219Display::SEG_BLANK;
             segs[7] = MAX7219Display::digit((int)kSignatures[val]);
             break;
-        case MENU_ACC:
-            render_int3(segs, kNudgeMs[val]);
-            break;
         case MENU_BRIT:
             render_int3(segs, val + 1);  // show 1-4 (user level)
             break;
@@ -433,10 +386,6 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             else if (val == MODE_AUDIO){ segs[5] = CH_A; segs[6] = CH_u; segs[7] = CH_d; }
             else                       { segs[5] = CH_t; segs[6] = CH_A; segs[7] = CH_P; }
             break;
-        case MENU_MWIN:  render_int3(segs, val); break;
-        case MENU_MSLEW: render_int3(segs, val); break;
-        case MENU_MTHR:  render_int3(segs, val); break;
-        case MENU_MGATE: render_int3(segs, val); break;
         case MENU_NET:
             // 4-char value fills positions 4-7, overriding the blank separator
             if (val == 0) {
@@ -450,9 +399,6 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             break;
         case MENU_CURIP:
             render_int3(segs, val);
-            break;
-        case MENU_IP: case MENU_SN: case MENU_GT:
-            segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
             break;
         case MENU_RESET:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
@@ -510,9 +456,6 @@ static void update_display() {
             segs[1] = (hundreds || tens) ? MAX7219Display::digit(tens)     : MAX7219Display::SEG_BLANK;
             segs[2] = MAX7219Display::digit(units) | MAX7219Display::SEG_DP;
             segs[3] = MAX7219Display::digit(tenths);
-            // Persistent mode bar (top=CDJ, middle=Manual, bottom=Audio)
-            segs[4] = (g_mode == MODE_CDJ) ? BAR_TOP
-                    : (g_mode == MODE_MANUAL) ? BAR_MID : BAR_BOT;
             // Lock dot on beat digit: solid=locked, blinking=Audio searching, blank=inactive
             bool locked_state = (g_mode == MODE_CDJ    && g_cdj_active)
                              || (g_mode == MODE_AUDIO  && g_mic_locked)
@@ -520,6 +463,10 @@ static void update_display() {
             bool searching    = (g_mode == MODE_AUDIO && g_mic_armed && !g_mic_locked);
             bool dot = locked_state || (searching && (now_us() / 250000ULL) % 2 == 0);
             segs[5] = MAX7219Display::digit((int)floor(phase) + 1) | (dot ? MAX7219Display::SEG_DP : 0);
+            // Persistent mode bar (top=CDJ, middle=Manual, bottom=Audio) — placed
+            // behind the beat counter so the counter's left side stays clean.
+            segs[6] = (g_mode == MODE_CDJ) ? BAR_TOP
+                    : (g_mode == MODE_MANUAL) ? BAR_MID : BAR_BOT;
             segs[7] = MAX7219Display::digit(peers > 9 ? 9 : peers);
         }
         display.setSegments(segs);
@@ -536,22 +483,6 @@ static void update_display() {
     if (appMode == MODE_OTA_CONFIRM) {
         segs[0] = CH_u; segs[1] = CH_P; segs[2] = CH_d; segs[3] = MAX7219Display::SEG_BLANK;
         segs[4] = CH_S; segs[5] = CH_u; segs[6] = CH_r; segs[7] = CH_e;
-        display.setSegments(segs);
-        return;
-    }
-
-    if (appMode == MODE_SUBMENU_NAV || appMode == MODE_SUBMENU_EDIT) {
-        if (menuSubItem == 4) {
-            segs[0] = CH_d; segs[1] = CH_o; segs[2] = CH_n; segs[3] = CH_e;
-        } else {
-            segs[0] = MAX7219Display::digit(0);  // O
-            segs[1] = CH_c;
-            segs[2] = CH_t;
-            segs[3] = MAX7219Display::digit(menuSubItem + 1);
-            int  val   = (appMode == MODE_SUBMENU_EDIT) ? menuEditVal : submenu_array()[menuSubItem];
-            bool blank = (appMode == MODE_SUBMENU_EDIT) && ((now / 250) & 1);
-            if (!blank) render_int3(segs, val);
-        }
         display.setSegments(segs);
         return;
     }
@@ -704,9 +635,12 @@ static void start_scroll_splash(const uint8_t *label_segs, int label_len, const 
 static bool           s_wifi_joined      = false;
 static bool           g_sta_failed       = false;
 static bool           g_wifi_initialized = false;
+static bool           s_wifi_use_static  = false;  // g_net==1 applied to STA netif
 static esp_netif_t   *s_ap_netif         = nullptr;
 static esp_netif_t   *s_sta_netif        = nullptr;
 static httpd_handle_t s_httpd            = nullptr;
+
+static void http_server_start();  // forward declaration
 
 static void nvs_save_wifi() {
     nvs_handle_t h;
@@ -727,7 +661,7 @@ static void nvs_save_ota_pending(bool pending) {
 
 static void rtc_save_settings() {
     s_rtc.magic    = RTC_MAGIC;
-    s_rtc.sigIdx   = g_sigIdx;   s_rtc.nudgeIdx = g_nudgeIdx;
+    s_rtc.sigIdx   = g_sigIdx;
     s_rtc.brit     = g_brit;     s_rtc.mode     = g_mode;    s_rtc.net = g_net;
     s_rtc.micWin   = g_micWin;   s_rtc.micSlew  = g_micSlew;
     s_rtc.micThr   = g_micThr;   s_rtc.micGate  = g_micGate;
@@ -744,7 +678,6 @@ static void rtc_restore_to_nvs_if_valid() {
     nvs_handle_t h;
     if (nvs_open("settings", NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_i32(h, "sig",       s_rtc.sigIdx);
-    nvs_set_i32(h, "nud",       s_rtc.nudgeIdx);
     nvs_set_i32(h, "brit",      s_rtc.brit);
     nvs_set_i32(h, "mode",      s_rtc.mode);
     nvs_set_i32(h, "mwin",      s_rtc.micWin);
@@ -820,13 +753,18 @@ static esp_err_t http_get_root(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req,
         "<label>Password</label>"
         "<input name=pass type=password placeholder=\"(leave blank to keep current)\">"
-        "<h3>Ethernet</h3><label>Mode</label>"
+        "<h3>Network Mode</h3>"
+        "<label>Applies to whichever interface is active (Ethernet or WiFi)</label>"
         "<select name=net"
         " onchange=\"document.getElementById('sb').style.display="
         "this.value==='1'?'block':'none'\">");
     snprintf(tmp, sizeof(tmp),
-        "<option value=0%s>DHCP</option><option value=1%s>Static</option></select>",
+        "<option value=0%s>DHCP</option><option value=1%s>Static</option>",
         g_net == 0 ? " selected" : "", g_net == 1 ? " selected" : "");
+    httpd_resp_sendstr_chunk(req, tmp);
+    snprintf(tmp, sizeof(tmp),
+        "<option value=2%s>Access Point</option></select>",
+        g_net == 2 ? " selected" : "");
     httpd_resp_sendstr_chunk(req, tmp);
     snprintf(tmp, sizeof(tmp),
         "<div id=sb><label>IP</label><input name=ip value=\"%d.%d.%d.%d\">",
@@ -868,14 +806,24 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<label>Brightness (1-4)</label>"
         "<input name=brit type=number min=1 max=4 value=%d>", g_brit + 1);
     httpd_resp_sendstr_chunk(req, tmp);
-    httpd_resp_sendstr_chunk(req, "<label>Nudge size</label><select name=acc>");
-    for (int i = 0; i < kNudgeCount; i++) {
-        snprintf(tmp, sizeof(tmp), "<option value=%d%s>%d ms</option>",
-            i, i == g_nudgeIdx ? " selected" : "", kNudgeMs[i]);
-        httpd_resp_sendstr_chunk(req, tmp);
-    }
     httpd_resp_sendstr_chunk(req,
-        "</select>"
+        "<h3>Audio Tuning</h3>"
+        "<label>Accept window, &plusmn; BPM (1&ndash;10)</label>");
+    snprintf(tmp, sizeof(tmp), "<input name=mwin type=number min=1 max=10 value=%d>", g_micWin);
+    httpd_resp_sendstr_chunk(req, tmp);
+    snprintf(tmp, sizeof(tmp),
+        "<label>Tempo slew, 0.1%%/sec (0&ndash;50)</label>"
+        "<input name=mslew type=number min=0 max=50 value=%d>", g_micSlew);
+    httpd_resp_sendstr_chunk(req, tmp);
+    snprintf(tmp, sizeof(tmp),
+        "<label>Onset threshold (0&ndash;30)</label>"
+        "<input name=mthr type=number min=0 max=30 value=%d>", g_micThr);
+    httpd_resp_sendstr_chunk(req, tmp);
+    snprintf(tmp, sizeof(tmp),
+        "<label>Noise gate (0&ndash;50)</label>"
+        "<input name=mgate type=number min=0 max=50 value=%d>", g_micGate);
+    httpd_resp_sendstr_chunk(req, tmp);
+    httpd_resp_sendstr_chunk(req,
         "<button class=btn-disp>Save Settings</button>"
         "</form>"
 
@@ -939,7 +887,10 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
     if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount)   g_sigIdx   = v; }
     if (form_field(body, "mode", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 2)          g_mode     = v; }
     if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp) - 1; if (v >= 0 && v <= 3)       g_brit     = v; }
-    if (form_field(body, "acc",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kNudgeCount)  g_nudgeIdx = v; }
+    if (form_field(body, "mwin", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 10)           g_micWin   = v; }
+    if (form_field(body, "mslew",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micSlew  = v; }
+    if (form_field(body, "mthr", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 30)           g_micThr   = v; }
+    if (form_field(body, "mgate",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micGate  = v; }
     free(body);
 
     nvs_save_settings();
@@ -970,7 +921,19 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         s_wifi_joined = true;
     }
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
-        printf("WiFi: associated — waiting for DHCP\n");
+        if (s_wifi_use_static) {
+            // Static IP: there is no GOT_IP event (DHCP client is stopped), so
+            // mark connected here instead, mirroring ethernet_config.h.
+            esp_netif_ip_info_t info;
+            if (esp_netif_get_ip_info(s_sta_netif, &info) == ESP_OK)
+                esp_ip4addr_ntoa(&info.ip, g_wifi_ip_str, sizeof(g_wifi_ip_str));
+            s_wifi_joined = true;
+            g_wifi_got_ip = true;
+            printf("WiFi IP (static): %s\n", g_wifi_ip_str);
+            http_server_start();
+        } else {
+            printf("WiFi: associated — waiting for DHCP\n");
+        }
     }
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
@@ -1034,6 +997,16 @@ static void wifi_start_sta() {
     if (g_wifi_enabled) esp_wifi_stop();
     if (!s_sta_netif) s_sta_netif = esp_netif_create_default_wifi_sta();
 
+    s_wifi_use_static = (g_net == 1);
+    if (s_wifi_use_static) {
+        esp_netif_dhcpc_stop(s_sta_netif);
+        esp_netif_ip_info_t info = {};
+        info.ip.addr      = htonl(((uint32_t)g_ip[0]<<24)|((uint32_t)g_ip[1]<<16)|((uint32_t)g_ip[2]<<8)|(uint32_t)g_ip[3]);
+        info.netmask.addr = htonl(((uint32_t)g_sn[0]<<24)|((uint32_t)g_sn[1]<<16)|((uint32_t)g_sn[2]<<8)|(uint32_t)g_sn[3]);
+        info.gw.addr      = htonl(((uint32_t)g_gt[0]<<24)|((uint32_t)g_gt[1]<<16)|((uint32_t)g_gt[2]<<8)|(uint32_t)g_gt[3]);
+        esp_netif_set_ip_info(s_sta_netif, &info);
+    }
+
     wifi_config_t sta_cfg = {};
     strncpy((char *)sta_cfg.sta.ssid,     g_wifi_ssid, sizeof(sta_cfg.sta.ssid));
     strncpy((char *)sta_cfg.sta.password, g_wifi_pass, sizeof(sta_cfg.sta.password));
@@ -1047,7 +1020,7 @@ static void wifi_start_sta() {
     g_wifi_enabled = true;
     g_wifi_as_ap   = false;
     s_wifi_joined  = false;
-    printf("WiFi STA: connecting to %s\n", g_wifi_ssid);
+    printf("WiFi STA: connecting to %s%s\n", g_wifi_ssid, s_wifi_use_static ? " (static IP)" : "");
 }
 
 static void wifi_stop() {
@@ -1103,19 +1076,10 @@ static void go_live(double bpm, uint32_t sessionStartMs) {
 
 static void capture_net_snapshot() {
     g_net_snap = g_net;
-    for (int i = 0; i < 4; i++) {
-        g_ip_snap[i] = g_ip[i];
-        g_sn_snap[i] = g_sn[i];
-        g_gt_snap[i] = g_gt[i];
-    }
 }
 
 static bool net_config_changed() {
-    if (g_net != g_net_snap) return true;
-    for (int i = 0; i < 4; i++)
-        if (g_ip[i] != g_ip_snap[i] || g_sn[i] != g_sn_snap[i] || g_gt[i] != g_gt_snap[i])
-            return true;
-    return false;
+    return g_net != g_net_snap;
 }
 
 static void exit_menu() {
@@ -1200,14 +1164,6 @@ static void on_button_short_press() {
             menuEnteredAt = now;
             break;
         }
-        case MODE_SUBMENU_NAV:
-            menuSubItem   = (menuSubItem + 1) % 5;
-            menuEnteredAt = now;
-            break;
-        case MODE_SUBMENU_EDIT:
-            menuEditVal   = (menuEditVal + 1) % 256;
-            menuEnteredAt = now;
-            break;
         case MODE_OTA_CONFIRM:
         case MODE_MENU_CONFIRM:
             appMode = MODE_NORMAL;
@@ -1252,20 +1208,15 @@ static void handle_button() {
     if (short_rise) on_button_short_press();
 
     // Auto-increment while held in edit modes (starts at 500 ms, speeds up at 1500 ms)
-    bool inEdit = (appMode == MODE_MENU_EDIT || appMode == MODE_SUBMENU_EDIT);
-    if (held && inEdit) {
+    if (held && appMode == MODE_MENU_EDIT) {
         uint32_t held_ms  = now - s_tap_ctx.pressed_at;
         uint32_t interval = (held_ms < 1500) ? 200 : 50;
         if (held_ms >= 500 && (now - s_tap_ctx.auto_incr_at) >= interval) {
             s_tap_ctx.auto_incr_at = now;
             s_tap_ctx.long_fired   = true;
-            if (appMode == MODE_MENU_EDIT) {
-                int lo = menu_val_min(menuItem), hi = menu_val_max(menuItem);
-                menuEditVal = lo + ((menuEditVal - lo + 1 + (hi - lo + 1)) % (hi - lo + 1));
-                if (menuItem == MENU_BRIT) display.setIntensity(kBritLevels[menuEditVal]);
-            } else {
-                menuEditVal = (menuEditVal + 1) % 256;
-            }
+            int lo = menu_val_min(menuItem), hi = menu_val_max(menuItem);
+            menuEditVal = lo + ((menuEditVal - lo + 1 + (hi - lo + 1)) % (hi - lo + 1));
+            if (menuItem == MENU_BRIT) display.setIntensity(kBritLevels[menuEditVal]);
             menuEnteredAt = now;
         }
     }
@@ -1306,10 +1257,6 @@ static void on_select_short_press() {
                 }
                 start_scroll_splash(label, label_len, ip);
                 menuEnteredAt = now;
-            } else if (menuItem == MENU_IP || menuItem == MENU_SN || menuItem == MENU_GT) {
-                menuSubItem   = 0;
-                appMode       = MODE_SUBMENU_NAV;
-                menuEnteredAt = now;
             } else {
                 menuEditVal   = menu_get_val(menuItem);
                 appMode       = MODE_MENU_EDIT;
@@ -1332,36 +1279,17 @@ static void on_select_short_press() {
         case MODE_MENU_CONFIRM:
             factory_reset();  // does not return
             break;
-        case MODE_SUBMENU_NAV:
-            if (menuSubItem == 4) {
-                nvs_save_settings();  // batch save: all octets committed, write once
-                appMode       = MODE_MENU_NAV;
-                menuEnteredAt = now;
-            } else {
-                menuEditVal   = submenu_array()[menuSubItem];
-                appMode       = MODE_SUBMENU_EDIT;
-                menuEnteredAt = now;
-            }
-            break;
-        case MODE_SUBMENU_EDIT:
-            submenu_array()[menuSubItem] = menuEditVal;
-            appMode       = MODE_SUBMENU_NAV;
-            menuEnteredAt = now;
-            break;
     }
 }
 
 static void on_select_long_press() {
-    uint32_t now = now_ms();
     switch (appMode) {
-        case MODE_SUBMENU_NAV:
-        case MODE_SUBMENU_EDIT:
-            nvs_save_settings();  // save any confirmed octets before exiting
+        case MODE_MENU_EDIT:
+            // Back out of editing without committing the in-progress value.
             appMode       = MODE_MENU_NAV;
-            menuEnteredAt = now;
+            menuEnteredAt = now_ms();
             break;
         case MODE_MENU_NAV:
-        case MODE_MENU_EDIT:
         case MODE_MENU_CONFIRM:
         case MODE_OTA_CONFIRM:
             exit_menu();
@@ -1392,8 +1320,6 @@ static void check_menu_timeout() {
     if (now - menuEnteredAt < MENU_TIMEOUT_MS) return;
     if (appMode == MODE_MENU_EDIT && menuItem == MENU_BRIT)
         display.setIntensity(kBritLevels[g_brit]);
-    if (appMode == MODE_SUBMENU_NAV || appMode == MODE_SUBMENU_EDIT)
-        nvs_save_settings();  // save confirmed octets on timeout
     if (menuItem == MENU_DONE) menuItem = 0;
     appMode = MODE_NORMAL;
     if (net_config_changed()) show_boot_reboot();  // one reboot to apply net changes
@@ -1478,12 +1404,11 @@ static void osc_handle(const uint8_t *buf, int len) {
         tapTempo.setBpm(bpm);
         set_link_tempo(tapTempo.bpm());
         printf("OSC bpm: %.1f\n", tapTempo.bpm());
-    } else if (strcmp(addr, "/nudge_up") == 0) {
-        nudge_phase(g_nudgeUs);
-        printf("OSC nudge +%dms\n", kNudgeMs[g_nudgeIdx]);
-    } else if (strcmp(addr, "/nudge_down") == 0) {
-        nudge_phase(-g_nudgeUs);
-        printf("OSC nudge -%dms\n", kNudgeMs[g_nudgeIdx]);
+    } else if (strcmp(addr, "/nudge") == 0) {
+        int ms = (args_len >= 4) ? ((tags[1] == 'f') ? (int)osc_float(args) : (int)(int32_t)osc_u32(args))
+                                  : DEFAULT_NUDGE_MS;
+        nudge_phase(ms * 1000);
+        printf("OSC nudge %dms\n", ms);
     } else if (strcmp(addr, "/downbeat") == 0) {
         reset_downbeat();
         printf("OSC downbeat reset\n");

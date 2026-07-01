@@ -23,9 +23,9 @@ tapbox uses an 8-digit display that shows you everything you need at a glance.
 Reading left to right:
 
 - **beat** — the current tempo in BPM (`120.0`), updated in real time when any device in the Link session adjusts it
-- **mode bar** — a single horizontal segment just after the tempo shows which sync mode is active: **top = CDJ**, **middle = Manual**, **bottom = Audio**
 - **count** — which beat of the bar you are on right now (advances with the music)
 - **lock dot** — the decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio mode listening but not yet stable; **off** = no lock
+- **mode bar** — a single horizontal segment just after the count digit shows which sync mode is active: **top = CDJ**, **middle = Manual**, **bottom = Audio**
 - **peers** — how many other Ableton Link peers are connected to the session
 
 On startup, tapbox joins the existing Link session tempo if one is already running, otherwise it starts at 120 BPM. You can tap a new tempo whenever you are ready.
@@ -113,15 +113,15 @@ tapbox switches interfaces automatically without a reboot:
 
 If WiFi credentials fail to connect, tapbox falls back to AP mode immediately so you can reconfigure without rebooting.
 
-By default tapbox uses DHCP for the Ethernet connection. If you need a fixed address, configure a static IP in the `Lan.` / `IP` / `Sub.` / `Hub.` menu items.
+By default tapbox uses DHCP. If you need a fixed address, set `Lan.` to `Stat` on the device and enter the IP/subnet/gateway on the web config page (see below) — this applies to whichever interface, Ethernet or WiFi, is actually active.
 
 ### Web Configuration Page
 
 The config page is available at the device IP address on port 80 from any browser, over Ethernet or WiFi. It is split into two independent sections:
 
-**Network** (WiFi SSID/password, Ethernet mode, static IP/subnet/gateway) — tap **Save Network — tapbox will reboot** to apply. The orange button is a reminder that a reboot follows.
+**Network** (WiFi SSID/password, network mode, static IP/subnet/gateway) — tap **Save Network — tapbox will reboot** to apply. The orange button is a reminder that a reboot follows. Network mode has three options — DHCP, Static, and Access Point — and static IP/subnet/gateway apply to whichever interface (Ethernet or WiFi) is active.
 
-**Settings** (time signature, sync mode, brightness, nudge size) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
+**Settings** (time signature, sync mode, brightness, audio tuning) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
 
 ---
 
@@ -129,7 +129,7 @@ The config page is available at the device IP address on port 80 from any browse
 
 Press the select button to open the menu. Press the tap button to move between items. Press the select button to enter edit mode for the selected item, then press the tap button to change the value (hold for fast auto-increment). Press select again to confirm and return to the menu.
 
-To go back from any edit or sub-menu, hold the select button for one second. To exit the menu entirely, hold select or wait six seconds — tapbox returns to normal mode without saving the current edit. When you next open the menu it returns to the last item you were on.
+To go back from an edit, hold the select button for one second. To exit the menu entirely, hold select or wait six seconds — tapbox returns to normal mode without saving the current edit. When you next open the menu it returns to the last item you were on.
 
 ---
 
@@ -144,18 +144,6 @@ The beat counter on the display counts from 1 up to this number, then loops back
 **When to use it:** if you are playing a waltz in 3/4, set this to 3 so the counter runs 1–2–3 rather than counting to 4 and going out of sync with the phrase. For odd-time signatures like 7/8, set it to 7.
 
 *Default: 4*
-
----
-
-### nud — Nudge Size
-
-**What it does:** sets the OSC nudge amount — how far the beat phase shifts in response to a `/nudge_up` or `/nudge_down` command.
-
-Three options: **50 ms**, **20 ms**, **5 ms**.
-
-50 ms is best for live performance where you need to push or pull the phase decisively. 5 ms is for studio work where you need surgical phase correction. 20 ms is a good everyday value.
-
-*Default: 20 ms*
 
 ---
 
@@ -183,18 +171,18 @@ The active mode is shown by a bar on the display (top = CDJ, middle = Manual, bo
 
 > CDJ sync requires Ethernet, on the same wired switch as the players. Nothing is installed on the CDJs — tapbox listens passively.
 
-*Default: Cdj*
+*Default: Aud*
 
 ---
 
-### uind, SLEu, thr, gAte — Audio Tuning
+### Audio Tuning
 
-These four items only appear when `node` is set to `Aud`. They tune the microphone beat detector:
+The four microphone beat-detector parameters are configured on the **web config page** — there's no practical way to dial these in one tap at a time, and they're rarely touched once set:
 
-- **`uind`** — accept window: how far (± BPM, 1–10) a detected beat may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
-- **`SLEu`** — tempo slew: how fast the detected tempo is allowed to move (rate limit), in units of 0.1 %/sec.
-- **`thr`** — onset threshold: how much a kick must stand out to count. Higher rejects more false hits.
-- **`gAte`** — noise gate: an absolute loudness floor (range 0–50). A sound has to be at least this loud to count as a beat at all, no matter what else is happening.
+- **Accept window** (± BPM, 1–10): how far a detected beat may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
+- **Tempo slew**: how fast the detected tempo is allowed to move (rate limit), in units of 0.1 %/sec.
+- **Onset threshold**: how much a kick must stand out to count. Higher rejects more false hits.
+- **Noise gate** (0–50): an absolute loudness floor. A sound has to be at least this loud to count as a beat at all, no matter what else is happening.
 
 The defaults work for typical four-on-the-floor material. For the full explanation of what each does and how to dial them in, see `BEAT_DETECTION.md`.
 
@@ -202,11 +190,11 @@ The defaults work for typical four-on-the-floor material. For the full explanati
 
 ### Lan. — Network Mode
 
-**What it does:** switches the Ethernet interface between automatic (DHCP) and manual (static) IP addressing.
+**What it does:** switches network addressing between automatic (DHCP), manual (static), and forced Access Point mode — applies to whichever interface, Ethernet or WiFi, is currently active.
 
 - **Auto** — your router assigns tapbox an IP address automatically every time it boots.
-- **Stat** — tapbox uses a fixed IP address that you configure yourself.
-- **AP** — tapbox starts a wifi network called `tapbox` with IP addres `192.168.4.1` this is helpful if there is no network to link a computer with tapbox.
+- **Stat** — tapbox uses a fixed IP address, entered on the web config page (see below).
+- **AP** — tapbox starts a wifi network called `tapbox` with IP address `192.168.4.1`. Useful if there's no other way to reach a browser, or if your normal WiFi network associates but won't actually pass traffic to the device (client isolation, captive portal) — this menu item lets you force your way back to a working config page without needing the network to cooperate first.
 
 **When to use static:** if you send OSC commands from a DAW or control surface with a hard-coded destination address, a static IP ensures that address never changes between reboots.
 
@@ -218,13 +206,7 @@ When you confirm a change to this setting, tapbox displays `bOOt` and restarts a
 
 ### IP, Sub., Hub. — Static Network Address
 
-These three items only appear when network mode is **Stat**. Each opens a sub-menu with four octets labelled **Oct1** through **Oct4**.
-
-- **IP** — the static IP address (e.g. 192 . 168 . 1 . 50)
-- **Sub.** — the subnet mask (e.g. 255 . 255 . 255 . 0)
-- **Hub.** — the gateway address, usually your router (e.g. 192 . 168 . 1 . 1)
-
-Press select to enter the sub-menu. Press the tap button to move between Oct1–Oct4 and the **done** item. Press select to edit an octet, tap to increment, select to confirm. Navigate to **done** and press select to return to the main menu.
+The static IP, subnet mask, and gateway are entered on the **web config page** — see **Web Configuration Page** above. They only take effect when `Lan.` is set to **Stat**, and apply to whichever interface (Ethernet or WiFi) is active.
 
 Factory defaults: **192.168.1.200** / **255.255.255.0** / **192.168.1.1**.
 
@@ -266,7 +248,7 @@ To cancel: press **tap**, hold **select** for 1 second, or wait 6 seconds — ta
 
 Open the menu, then hold both the **tap button** and the **select button** for **8 seconds**. You will see `UPd.----` at 3 seconds and then `rSEt SurE` at 8 seconds. Release the buttons.
 
-Press **select** to confirm. tapbox resets all settings to factory defaults — sync mode to CDJ, time signature to 4, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
+Press **select** to confirm. tapbox resets all settings to factory defaults — sync mode to Audio, time signature to 4, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
 
 To cancel: press nothing (or press tap). The display returns to normal after 6 seconds without resetting anything.
 
@@ -283,8 +265,7 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 | `/tap` | Same as pressing the tap button |
 | `/bpm <value>` | Set the tempo to a specific BPM |
 | `/signature <value>` | Change the time signature (2 through 7) |
-| `/nudge_up` | Shift the beat phase forward by the nudge amount |
-| `/nudge_down` | Shift the beat phase backward by the nudge amount |
+| `/nudge <ms>` | Shift the beat phase by `<ms>` milliseconds — positive nudges forward, negative nudges back. Omit the argument for a default 20ms nudge forward. |
 | `/downbeat` | Reset the downbeat to this exact moment |
 
 **A few ways to put this to use:**
@@ -292,7 +273,7 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 - Map `/tap` to a pad on a MIDI controller via your DAW so the whole band can tap tempo from the stage.
 - Send `/bpm 128` from an Ableton Live clip to snap the tempo to a specific value at the start of a track.
 - Use `/downbeat` at the top of a new section to re-align the beat grid after a break.
-- Assign `/nudge_up` and `/nudge_down` to fader buttons on a mixing desk to subtly push and pull the phase.
+- Assign `/nudge 40` and `/nudge -40` to fader buttons on a mixing desk for a decisive push/pull, or `/nudge 5` / `/nudge -5` for fine phase correction.
 
 ---
 
