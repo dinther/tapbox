@@ -295,6 +295,23 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 
 ---
 
+## Madmapper settings
+
+### Ableton Link
+
+Ableton Link support is built into MadMapper. It is as simple as (1), turning on "Ableton Link" on the Master tab iunder Global BPM. MadMapper acts by defaut as a slave in the Ableton Link session, however, it is possible to control the BPM of the Ableton Link session directly by turning on (2) "Enable Setting BPM".
+
+Assuming tapbox is turned on and correctly connected, the Peers field (3) should at least show one.The peer count is heigher if there are other Ableton Link enabled programs somewhere on the network.
+
+You can read the current BPM in the BPM field (4). If "Enable Setting BPM" is turned on then you can adjust the Ableton Link BPM with the BPM slider.
+
+![Display layout](docs/tapbox_madmapper_master_ableton.png)
+
+### Send OSC
+
+MadMapper has OSC modules designed to send OSC commands. These can be used to send specific OSC commands to tapbox. Details of these commands can be found in the OSC section. To start we need to tell MadMapper where the tapbox OSC server resides.
+(note: when you use Lan
+
 ## Tips and Tricks
 
 **CDJ sync with Ableton Live:** plug tapbox into the same Ethernet switch as your CDJ players with CDJ sync turned On. The moment a CDJ starts playing, the `C` indicator lights up and every Ableton Live instance on the network locks to the CDJ tempo automatically — no tapping, no MIDI clock, no configuration on the CDJs.
