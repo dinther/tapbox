@@ -191,7 +191,7 @@ The config page at `http://<tapbox-ip>` is accessible from any browser over Ethe
 | Section | Fields | Button | Effect |
 |---------|--------|--------|--------|
 | Network | WiFi SSID/password, Ethernet mode, static IP/subnet/gateway | Save Network — tapbox will reboot | Saves and reboots |
-| Display | Time signature, sync mode, brightness, nudge size | Save Display Settings | Saves and applies live — no reboot |
+| Settings | Time signature, sync mode, brightness, nudge size | Save Settings | Saves and applies live — no reboot |
 
 ## OSC Interface
 

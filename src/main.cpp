@@ -842,7 +842,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<hr>"
 
         "<form method=post action=/apply>"
-        "<h3>Display</h3>"
+        "<h3>Settings</h3>"
         "<label>Time signature</label><select name=sig>");
     static const char *sigs[] = {"2","3","4","5","6","7"};
     for (int i = 0; i < 6; i++) {
@@ -871,7 +871,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
     }
     httpd_resp_sendstr_chunk(req,
         "</select>"
-        "<button class=btn-disp>Save Display Settings</button>"
+        "<button class=btn-disp>Save Settings</button>"
         "</form>"
 
         "<script>"
