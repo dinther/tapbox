@@ -121,7 +121,7 @@ The config page is available at the device IP address on port 80 from any browse
 
 **Network** (WiFi SSID/password, Ethernet mode, static IP/subnet/gateway) — tap **Save Network — tapbox will reboot** to apply. The orange button is a reminder that a reboot follows.
 
-**Display** (time signature, sync mode, brightness, nudge size) — tap **Save Display Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
+**Settings** (time signature, sync mode, brightness, nudge size) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
 
 ---
 
@@ -206,6 +206,7 @@ The defaults work for typical four-on-the-floor material. For the full explanati
 
 - **Auto** — your router assigns tapbox an IP address automatically every time it boots.
 - **Stat** — tapbox uses a fixed IP address that you configure yourself.
+- **AP** — tapbox starts a wifi network called `tapbox` with IP addres `192.168.4.1` this is helpful if there is no network to link a computer with tapbox.
 
 **When to use static:** if you send OSC commands from a DAW or control surface with a hard-coded destination address, a static IP ensures that address never changes between reboots.
 
