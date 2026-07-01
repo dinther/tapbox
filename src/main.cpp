@@ -77,7 +77,7 @@ static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 8
-#define FW_PATCH 0
+#define FW_PATCH 1
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
