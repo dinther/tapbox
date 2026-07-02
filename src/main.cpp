@@ -74,7 +74,7 @@ static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
 #define FW_MINOR 11
-#define FW_PATCH 0
+#define FW_PATCH 1
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
 static const double kSignatures[] = { 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 };
@@ -1981,6 +1981,7 @@ static void mic_task(void *) {
     double   baseline = 0.0;                    // adaptive energy floor
     uint32_t lastOnset = 0, lastApply = 0, lastDbg = 0;
     uint64_t lastOnsetUs = 0;                   // precise (sub-frame) onset time
+    uint64_t lastAccUs   = 0;                   // last ACCEPTED onset — beat-chain reference
     int      consec = 0;
     double   avgInterval   = 0.0;               // EMA of clean inter-beat interval (ms)
     double   lastTapAnchor = 0.0;               // detect re-arm → reset the average
@@ -2042,27 +2043,41 @@ static void mic_task(void *) {
             if (lastOnsetUs != 0) {
                 double interval = (double)(tPeak - lastOnsetUs) / 1000.0;  // ms, sub-frame precise
                 double bpm = 60000.0 / interval;
-                if (bpm >= 50.0 && bpm <= 220.0) {
-                    g_mic_bpm = bpm;                        // raw hint for display
+                if (bpm >= 50.0 && bpm <= 220.0) g_mic_bpm = bpm;   // raw hint for display
 
-                    if (g_mode == MODE_AUDIO && g_mic_armed) {
-                        // Judge acceptance against the STABLE tapped tempo, not the
-                        // wandering output — otherwise a small drift makes the window
-                        // admit one interval tail and reject the other, ratcheting away.
-                        double anchor = (g_mic_tapAnchor > 0.0) ? g_mic_tapAnchor : g_mic_tracked;
-                        if (anchor != lastTapAnchor) { avgInterval = 0.0; lastTapAnchor = anchor; }
+                if (g_mode == MODE_AUDIO && g_mic_armed) {
+                    // Judge acceptance against the STABLE tapped tempo, not the
+                    // wandering output — otherwise a small drift makes the window
+                    // admit one interval tail and reject the other, ratcheting away.
+                    double anchor = (g_mic_tapAnchor > 0.0) ? g_mic_tapAnchor : g_mic_tracked;
+                    if (anchor != lastTapAnchor) { avgInterval = 0.0; lastTapAnchor = anchor; lastAccUs = 0; }
 
-                        double cand = bpm;
+                    // Measure spacing from the last ACCEPTED beat when we have one —
+                    // a spurious detection between two kicks then can't shatter the
+                    // beat chain, and the octave fold below absorbs 2-4 beat spans.
+                    // Before the first acceptance (or after the chain goes stale)
+                    // fall back to consecutive-onset spacing.
+                    double aInt = interval;
+                    if (lastAccUs != 0) aInt = (double)(tPeak - lastAccUs) / 1000.0;
+                    double aBpm = 60000.0 / aInt;
+                    if (aBpm < 25.0) {          // chain stale (>~4 beats) — restart it
+                        lastAccUs = 0;
+                        aInt = interval;
+                        aBpm = bpm;
+                    }
+                    if (aBpm >= 25.0 && aBpm <= 220.0) {
+                        double cand = aBpm;
                         while (cand > anchor * 1.4) cand *= 0.5;   // fold octaves to anchor
                         while (cand < anchor * 0.7) cand *= 2.0;
                         double tol = (double)g_micWin;   // accept window, ± BPM
                         if (fabs(cand - anchor) <= tol) {
                             g_tele_acc = g_tele_acc + 1;
+                            lastAccUs = tPeak;
                             // Average the clean ~1-beat interval (EMA) → accurate, continuous
                             // tempo, unbiased (interval domain) and free of the 8 ms grid.
-                            if (cand == bpm) {                       // un-folded → true 1-beat
-                                if (avgInterval <= 0.0) avgInterval = interval;
-                                else                    avgInterval += 0.08 * (interval - avgInterval);
+                            if (cand == aBpm) {                      // un-folded → true 1-beat
+                                if (avgInterval <= 0.0) avgInterval = aInt;
+                                else                    avgInterval += 0.08 * (aInt - avgInterval);
                             }
                             double target = (avgInterval > 0.0) ? (60000.0 / avgInterval) : cand;
 
@@ -2082,6 +2097,7 @@ static void mic_task(void *) {
                             if (g_mic_tracked < lo) g_mic_tracked = lo;
                             if (g_mic_tracked > hi) g_mic_tracked = hi;
                             lastApply = now;
+                            lastOnset = now;  // last ACCEPTED beat — drives the lock-timeout below
                             if (++consec >= 4) g_mic_locked = true;
 
                             if (linkEnabled) {
@@ -2105,10 +2121,16 @@ static void mic_task(void *) {
                 }
             }
             lastOnsetUs = tPeak;
-            lastOnset   = now;   // ms, used only for the lock-timeout below
         }
 
-        if (g_mic_locked && (now - lastOnset) > 3500) { g_mic_locked = false; consec = 0; avgInterval = 0.0; }
+        // Drop the lock if no ACCEPTED beat (lastOnset, set only on acceptance
+        // above) has reinforced it recently — raw detections that never pass
+        // the accept window must not keep the lock alive. Hold = 6 beat-periods
+        // (min 3.5s) so slow tempos get the same tolerance in musical time.
+        uint32_t lockHold = (g_mic_tracked > 60.0)
+                          ? (uint32_t)(6.0 * 60000.0 / g_mic_tracked) : 6000;
+        if (lockHold < 3500) lockHold = 3500;
+        if (g_mic_locked && (now - lastOnset) > lockHold) { g_mic_locked = false; consec = 0; avgInterval = 0.0; }
 
         // Tuning telemetry while in Audio mode
         if (g_mode == MODE_AUDIO && (now - lastDbg) >= 500) {

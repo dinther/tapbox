@@ -64,3 +64,33 @@ Cosmetic (parked):
   page. Last-10s detected/accepted counts below the chart got the same
   treatment.
 
+Bugs:
+- Fixed: lock stayed on with 0 accepted beats (found by setting Onset
+  threshold to minimum: 40 detected, 0 accepted, lock never dropped). The
+  lock-timeout compared against lastOnset, which was refreshed on every raw
+  detection, not just accepted ones — so a detector spamming false onsets on
+  noise kept the "still fresh" timer alive forever even though nothing was
+  actually reinforcing the tracked tempo. lastOnset now only updates when a
+  beat is accepted (passes the accept window).
+- Fixed the overcorrection from the fix above ("hardly locking now"): the real
+  weakness was that acceptance judged the interval between CONSECUTIVE raw
+  detections — one spurious hit (hi-hat/snare/double-fire) between two kicks
+  splits the clean kick-to-kick interval into two fragments that both fail the
+  tempo test. Typical field numbers: 29 detected / 6 accepted per 10s, so
+  acceptance gaps regularly exceeded the 3.5s hold and the lock flickered.
+  Two-part remedy: (1) each detection is now judged by its spacing from the
+  last ACCEPTED beat (beat-chain reference; the octave fold absorbs 2-4 beat
+  spans; falls back to consecutive spacing before the first acceptance or when
+  the chain goes stale), so junk between kicks no longer shatters the chain
+  and acceptance rate ~= kick rate; (2) the lock hold is now 6 beat-periods
+  (min 3.5s) instead of a flat 3.5s, so slow tempos get the same tolerance in
+  musical time. The zero-accept torture test still unlocks correctly.
+- Practical baseline after all tuning: 30-50% of beats accepted depending on
+  the song. That's sufficient for stable lock/tracking (one accepted beat per
+  1-2s vs a 6-beat hold), and roughly the ceiling for energy-band onset
+  detection — it can't tell a kick from an off-grid bass hit. A real-time AI
+  audio feature extractor is being developed (externally) that may replace
+  the front-end; everything downstream (accept window, beat chain, folding,
+  slew, phase-lock, tuning UI) consumes onset timestamps and would carry over
+  unchanged.
+
