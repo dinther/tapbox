@@ -73,7 +73,7 @@ static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 10
+#define FW_MINOR 11
 #define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
@@ -99,6 +99,7 @@ static int g_micWin   = 4;             // beat-accept window, ± BPM around tapp
 static int g_micSlew  = 10;            // tempo slew limit, units of 0.1%/sec (0–50)
 static int g_micThr   = 8;             // onset threshold: energy > baseline*(1+thr/10) (0–30)
 static int g_micGate  = 17;           // absolute noise-gate floor (0–50, log scale: 10^(g/10)×1e-6)
+static int g_micFreq  = 150;           // kick-band low-pass cutoff, Hz (60–300)
 static int g_ip[4]    = {192, 168,   1, 200};
 static int g_sn[4]    = {255, 255, 255,   0};
 static int g_gt[4]    = {192, 168,   1,   1};
@@ -110,7 +111,7 @@ static char g_wifi_pass[64] = {};
 struct RtcSettings {
     uint32_t magic;
     int sigIdx, brit, net, mode;
-    int micWin, micSlew, micThr, micGate;
+    int micWin, micSlew, micThr, micGate, micFreq;
     int ip[4], sn[4], gt[4];
     char wifi_ssid[64], wifi_pass[64];
 };
@@ -256,6 +257,7 @@ static void nvs_load_settings() {
     if (nvs_get_i32(h, "mslew",&v) == ESP_OK && v >= 0 && v <= 50)         g_micSlew  = (int)v;
     if (nvs_get_i32(h, "mthr", &v) == ESP_OK && v >= 0 && v <= 30)         g_micThr   = (int)v;
     if (nvs_get_i32(h, "mgate",&v) == ESP_OK && v >= 0 && v <= 50)         g_micGate  = (int)v;
+    if (nvs_get_i32(h, "mfreq",&v) == ESP_OK && v >= 60 && v <= 300)       g_micFreq  = (int)v;
     if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 2)          g_net      = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]    = (int)v;
     if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]    = (int)v;
@@ -287,6 +289,7 @@ static void nvs_save_settings() {
     nvs_set_i32(h, "mslew",(int32_t)g_micSlew);
     nvs_set_i32(h, "mthr", (int32_t)g_micThr);
     nvs_set_i32(h, "mgate",(int32_t)g_micGate);
+    nvs_set_i32(h, "mfreq",(int32_t)g_micFreq);
     nvs_set_i32(h, "net",  (int32_t)g_net);
     nvs_set_i32(h, "ip0",  (int32_t)g_ip[0]);
     nvs_set_i32(h, "ip1",  (int32_t)g_ip[1]);
@@ -306,7 +309,7 @@ static void nvs_save_settings() {
 
 static void factory_reset() {
     g_sigIdx = 2; g_brit = 1; g_mode = MODE_AUDIO;
-    g_micWin = 4; g_micSlew = 10; g_micThr = 8; g_micGate = 17;  // 17 ≈ old linear default (50 chart units)
+    g_micWin = 4; g_micSlew = 10; g_micThr = 8; g_micGate = 17; g_micFreq = 150;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
@@ -759,7 +762,7 @@ static void rtc_save_settings() {
     s_rtc.sigIdx   = g_sigIdx;
     s_rtc.brit     = g_brit;     s_rtc.mode     = g_mode;    s_rtc.net = g_net;
     s_rtc.micWin   = g_micWin;   s_rtc.micSlew  = g_micSlew;
-    s_rtc.micThr   = g_micThr;   s_rtc.micGate  = g_micGate;
+    s_rtc.micThr   = g_micThr;   s_rtc.micGate  = g_micGate; s_rtc.micFreq = g_micFreq;
     for (int i = 0; i < 4; i++) { s_rtc.ip[i] = g_ip[i]; s_rtc.sn[i] = g_sn[i]; s_rtc.gt[i] = g_gt[i]; }
     strncpy(s_rtc.wifi_ssid, g_wifi_ssid, sizeof(s_rtc.wifi_ssid));
     strncpy(s_rtc.wifi_pass, g_wifi_pass, sizeof(s_rtc.wifi_pass));
@@ -779,6 +782,7 @@ static void rtc_restore_to_nvs_if_valid() {
     nvs_set_i32(h, "mslew",     s_rtc.micSlew);
     nvs_set_i32(h, "mthr",      s_rtc.micThr);
     nvs_set_i32(h, "mgate",     s_rtc.micGate);
+    nvs_set_i32(h, "mfreq",     s_rtc.micFreq);
     nvs_set_i32(h, "net",       s_rtc.net);
     nvs_set_i32(h, "ip0",  s_rtc.ip[0]); nvs_set_i32(h, "ip1",  s_rtc.ip[1]);
     nvs_set_i32(h, "ip2",  s_rtc.ip[2]); nvs_set_i32(h, "ip3",  s_rtc.ip[3]);
@@ -855,9 +859,17 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "input[type=range]{padding:0;height:28px;border:none;background:none;accent-color:#B7F7A5}"
         "#mchart{width:100%;height:330px;background:#111;border:1px solid #2a2a2a;"
         "border-radius:6px;display:block}"
+        "#mtop{display:flex;align-items:flex-end;gap:22px;margin:10px 0 8px}"
+        ".mbig{font-variant-numeric:tabular-nums}"
+        ".mbig div{font-size:30px;font-weight:800;color:#B7F7A5;width:4.2ch;"
+        "text-align:right;line-height:1}"
+        ".mbig span{display:block;color:#777;font-size:11px;text-transform:uppercase;"
+        "letter-spacing:.05em;margin-top:2px}"
+        "#mstate{display:inline-block;width:96px;text-align:center;padding:6px 0;"
+        "margin-left:auto;border-radius:4px;font-size:12px;font-weight:700;background:#161616}"
         "#mstat{font-size:12px;color:#777;margin:4px 0 2px}"
-        ".mnum{font-size:13px;color:#ccc;margin:2px 0}"
-        ".mnum b{color:#B7F7A5;font-weight:700}"
+        ".mnum{font-size:13px;color:#ccc;margin:2px 0;font-variant-numeric:tabular-nums}"
+        ".mnum b{color:#B7F7A5;font-weight:700;display:inline-block;min-width:2.4ch;text-align:right}"
         "</style></head><body>"
         "<h2>tap<span>box</span></h2>"
         "<div id=tabs>"
@@ -922,10 +934,14 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         httpd_resp_sendstr_chunk(req, tmp);
     }
     httpd_resp_sendstr_chunk(req, "</select>");
-    snprintf(tmp, sizeof(tmp),
-        "<label>Brightness (1-4)</label>"
-        "<input name=brit type=number min=1 max=4 value=%d>", g_brit + 1);
-    httpd_resp_sendstr_chunk(req, tmp);
+    httpd_resp_sendstr_chunk(req, "<label>Brightness</label><select name=brit>");
+    static const char *brits[] = {"Dim", "Normal", "High", "Too Much"};
+    for (int i = 0; i < 4; i++) {
+        snprintf(tmp, sizeof(tmp), "<option value=%d%s>%s</option>",
+            i, i == g_brit ? " selected" : "", brits[i]);
+        httpd_resp_sendstr_chunk(req, tmp);
+    }
+    httpd_resp_sendstr_chunk(req, "</select>");
     httpd_resp_sendstr_chunk(req,
         "<button class=btn-disp>Save Settings</button>"
         "</form>"
@@ -936,9 +952,13 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<h3>BPM Tuning</h3>"
         "<div id=mnote class=mnum style=\"display:none;color:#e90\">"
         "Audio sync is off &mdash; set Sync mode to Audio on the Settings tab</div>"
+        "<div id=mtop>"
+        "<div class=mbig><div id=mrawv>&hellip;</div><span>Measured BPM</span></div>"
+        "<div class=mbig><div id=mtrkv>&hellip;</div><span>Link BPM</span></div>"
+        "<div id=mstate>&hellip;</div>"
+        "</div>"
         "<canvas id=mchart width=320 height=330></canvas>"
         "<div id=mstat>connecting&hellip;</div>"
-        "<div class=mnum id=mnum1>&nbsp;</div>"
         "<div class=mnum id=mnum2>&nbsp;</div>");
 
     snprintf(tmp, sizeof(tmp), "<label>Accept window: <span id=mwinv>%d</span> &plusmn;BPM</label>", g_micWin);
@@ -969,6 +989,13 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "oninput=\"mgatev.textContent=this.value;applyField('mgate',this.value)\">", g_micGate);
     httpd_resp_sendstr_chunk(req, tmp);
 
+    snprintf(tmp, sizeof(tmp), "<label>Kick filter: <span id=mfreqv>%d</span> Hz</label>", g_micFreq);
+    httpd_resp_sendstr_chunk(req, tmp);
+    snprintf(tmp, sizeof(tmp),
+        "<input name=mfreq type=range min=60 max=300 step=5 value=%d "
+        "oninput=\"mfreqv.textContent=this.value;applyField('mfreq',this.value)\">", g_micFreq);
+    httpd_resp_sendstr_chunk(req, tmp);
+
     httpd_resp_sendstr_chunk(req,
         "<button type=button id=mrst class=btn-rst onclick=\"mDefaults()\">Reset Audio Defaults</button>"
         "<button class=btn-disp>Save Tuning</button>"
@@ -985,7 +1012,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "var st=document.querySelector('[name=net]').value=='1';"
           "['ip','sn','gw'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!st;});"
           "var au=document.querySelector('[name=mode]').value=='1';"
-          "['mwin','mslew','mthr','mgate'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
+          "['mwin','mslew','mthr','mgate','mfreq'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
           "mrst.disabled=!au;"
           "mchart.style.opacity=au?1:.35;"
           "mnote.style.display=au?'none':'block';"
@@ -1007,7 +1034,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
 
         // Must mirror the firmware defaults in factory_reset()
         "function mDefaults(){"
-          "var d={mwin:4,mslew:10,mthr:8,mgate:17};"
+          "var d={mwin:4,mslew:10,mthr:8,mgate:17,mfreq:150};"
           "for(var k in d){"
             "document.querySelector('[name='+k+']').value=d[k];"
             "document.getElementById(k+'v').textContent=d[k];"
@@ -1015,7 +1042,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "}"
         "}"
 
-        "var mHist=[],mScale=50,mClip=0,mStats=[];"
+        "var mHist=[],mStats=[];"
         "function mConnect(){"
           "var ws=new WebSocket('ws://'+location.host+'/ws');"
           "ws.onopen=function(){mstat.textContent='live';};"
@@ -1027,9 +1054,10 @@ static esp_err_t http_get_root(httpd_req_t *req) {
             "mHist.push(pt);"
             "if(mHist.length>150)mHist.shift();"
             "var raw=+p[5],trk=+p[6],st=+p[7];"
-            "mnum1.innerHTML='Measured: <b>'+(raw?raw.toFixed(1):'\\u2014')+'</b> BPM'"
-              "+' &nbsp;\\u00b7&nbsp; Link: <b>'+(trk?trk.toFixed(1):'\\u2014')+'</b> BPM'"
-              "+' &nbsp;\\u00b7&nbsp; '+(st==2?'<b>locked</b>':st==1?'searching':'idle \\u2014 tap to arm');"
+            "mrawv.textContent=raw?raw.toFixed(1):'\\u2014';"
+            "mtrkv.textContent=trk?trk.toFixed(1):'\\u2014';"
+            "mstate.textContent=st==2?'LOCKED':st==1?'SEARCHING':'IDLE';"
+            "mstate.style.color=st==2?'#B7F7A5':st==1?'#e90':'#777';"
             "mStats.push({ts:Date.now(),d:+p[8],a:+p[9]});"
             "while(mStats.length&&Date.now()-mStats[0].ts>10000)mStats.shift();"
             "if(mStats.length>1){"
@@ -1037,23 +1065,20 @@ static esp_err_t http_get_root(httpd_req_t *req) {
               "var dd=(l.d-f.d+100000)%100000,da=(l.a-f.a+100000)%100000;"
               "mnum2.innerHTML='Last 10s: <b>'+dd+'</b> beats detected &nbsp;\\u00b7&nbsp; <b>'+da+'</b> accepted';"
             "}"
-            // Fixed vertical scale: grow only after ~1s of consistent clipping,
-            // so the graph doesn't rescale on every transient peak.
-            "if(pt.e>mScale||pt.t>mScale){"
-              "if(++mClip>20){"
-                "var pk=10;"
-                "for(var i=0;i<mHist.length;i++){var h=mHist[i];if(h.e>pk)pk=h.e;if(h.t>pk)pk=h.t;}"
-                "mScale=pk*1.2;mClip=0;"
-              "}"
-            "}else if(mClip>0)mClip--;"
             "mDraw();"
           "};"
         "}"
         "function mDraw(){"
           "var c=document.getElementById('mchart'),ctx=c.getContext('2d'),W=c.width,H=c.height;"
           "ctx.clearRect(0,0,W,H);"
-          "function y(v){return H-Math.min(v/mScale,1)*H;}"
+          // Fixed log scale, 5 decades (1..1e5 chart units) — never rescales.
+          "function y(v){return H-Math.max(0,Math.min(Math.log10(v<1?1:v)/5,1))*H;}"
+          // Faint decade gridlines (10, 100, 1k, 10k)
+          "ctx.strokeStyle='#1e1e1e';ctx.lineWidth=1;ctx.setLineDash([]);"
+          "for(var d=1;d<5;d++){var gy=y(Math.pow(10,d));"
+            "ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}"
           "var last=mHist[mHist.length-1]||{t:0,g:0};"
+          "ctx.lineWidth=2;"
           "ctx.strokeStyle='#e90';ctx.setLineDash([4,3]);"
           "ctx.beginPath();ctx.moveTo(0,y(last.t));ctx.lineTo(W,y(last.t));ctx.stroke();"
           "ctx.strokeStyle='#c33';"
@@ -1130,11 +1155,12 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
     char tmp[64];
     if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount)   g_sigIdx   = v; }
     if (form_field(body, "mode", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 2)          g_mode     = v; }
-    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp) - 1; if (v >= 0 && v <= 3)       g_brit     = v; }
+    if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 3)           g_brit     = v; }
     if (form_field(body, "mwin", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 10)           g_micWin   = v; }
     if (form_field(body, "mslew",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micSlew  = v; }
     if (form_field(body, "mthr", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 30)           g_micThr   = v; }
     if (form_field(body, "mgate",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micGate  = v; }
+    if (form_field(body, "mfreq",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 60 && v <= 300)          g_micFreq  = v; }
     free(body);
 
     nvs_save_settings();
@@ -1958,14 +1984,16 @@ static void mic_task(void *) {
     int      consec = 0;
     double   avgInterval   = 0.0;               // EMA of clean inter-beat interval (ms)
     double   lastTapAnchor = 0.0;               // detect re-arm → reset the average
-    const double alpha = 0.03;                  // ~150 Hz LP at 32 kHz
-
     while (true) {
         size_t br = 0;
         if (i2s_channel_read(s_i2s_rx, samples, sizeof(samples), &br, pdMS_TO_TICKS(100)) != ESP_OK)
             continue;
         int n = (int)(br / sizeof(int32_t));
         if (n <= 0) continue;
+
+        // Single-pole low-pass coefficient for the current cutoff (recomputed
+        // every block so the tuning slider takes effect live).
+        double alpha = 1.0 - exp(-2.0 * M_PI * (double)g_micFreq / MIC_SAMPLE_RATE);
 
         double energy  = 0.0;
         int    cnt     = 0;

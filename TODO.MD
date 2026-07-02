@@ -39,6 +39,28 @@ Done (v1.9.0):
   protect. Verified end-to-end with a raw Python WS client: ~20Hz frames.
 
 Cosmetic (parked):
-- "uind" label is a rough abbreviation of "window" — consider a clearer label
 - display.jpg needs retaking — the mode bar moved position on the physical layout
 - MANUAL.md cleanup pass once the above lands
+- DONE: BPM tuning graph now plots on a fixed log scale (5 decades, faint
+  decade gridlines) — never rescales. Bonus: the log gate slider now maps
+  linearly to the red line's height.
+- ANSWERED: yes, tuning parameters apply in real time — each slider posts to
+  /apply (throttled to one request per 200ms) and the detector reads the
+  values every ~4ms mic block. No save needed for them to take effect; Save
+  Tuning only matters for... nothing actually, /apply already persists to NVS.
+- Do we want slider changes to NOT hit NVS flash on every drag? Currently
+  /apply saves to NVS each time (flash wear, minor).
+- DONE: added a 5th tuning slider — Kick filter (60-300Hz), the low-pass
+  cutoff that decides what counts as "kick" energy before the other four
+  controls ever see it. Recomputed live each mic block (1-exp(-2*pi*fc/fs)),
+  default 150Hz (unchanged from the old fixed constant). Persisted as "mfreq".
+- Click on "Save Tuning" should at least return to the correct tab. Perhaps this is where we should save params in real-time
+- DONE: Measured BPM and Link BPM moved above the chart as large (30px) tabular
+  numbers, with a fixed-width state badge (IDLE/SEARCHING/LOCKED, color-coded)
+  next to them.
+- DONE: fixed layout jitter — big BPM numbers and the state badge are
+  fixed-width with tabular-nums, so digit-count changes (e.g. 89.7 -> 128.3)
+  or state-text-length changes (e.g. locked -> searching) no longer reflow the
+  page. Last-10s detected/accepted counts below the chart got the same
+  treatment.
+

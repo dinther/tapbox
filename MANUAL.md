@@ -121,11 +121,19 @@ By default tapbox uses DHCP. If you need a fixed address, set `Lan.` to `Stat` o
 
 ### Web Configuration Page
 
-The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via `Addr` in the menu). This applies every time, in every mode, since the page can change any setting on the device. The page is split into two independent sections:
+The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via `Addr` in the menu). This applies every time, in every mode, since the page can change any setting on the device. The page is organized into three tabs, each with its own save button. Fields that don't apply to your current settings are greyed out rather than hidden, so the layout stays consistent.
 
-**Network** (WiFi SSID/password, network mode, static IP/subnet/gateway) — tap **Save Network — tapbox will reboot** to apply. The orange button is a reminder that a reboot follows. Network mode has three options — DHCP, Static, and Access Point — and static IP/subnet/gateway apply to whichever interface (Ethernet or WiFi) is active.
+![Network tab](docs/tapbox_web_config_network.png)
 
-**Settings** (time signature, sync mode, brightness, audio tuning) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
+**Network** (WiFi SSID/password, network mode, static IP/subnet/gateway) — tap **Save Network — tapbox will reboot** to apply. The orange button is a reminder that a reboot follows. Network mode has three options — DHCP, Static, and Access Point — and static IP/subnet/gateway apply to whichever interface (Ethernet or WiFi) is active. The IP/Subnet/Gateway fields grey out unless Network Mode is Static.
+
+![Settings tab](docs/tapbox_web_config_settings.png)
+
+**Settings** (time signature, sync mode, brightness) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
+
+![BPM tuning tab](docs/tapbox_web_config_BPM_tuner.png)
+
+**BPM tuning** — the five microphone beat-detector parameters plus a live chart of the microphone signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever Sync mode isn't set to Audio, since these settings only affect audio detection.
 
 ---
 
@@ -181,16 +189,19 @@ The active mode is shown by a bar on the display (top = CDJ, middle = Manual, bo
 
 ### Audio Tuning
 
-The four microphone beat-detector parameters are configured on the **web config page** — there's no practical way to dial these in one tap at a time, and they're rarely touched once set:
+The five microphone beat-detector parameters are configured on the **web config page** — there's no practical way to dial these in one tap at a time, and they're rarely touched once set:
 
 - **Accept window** (± BPM, 1–10): how far a detected beat may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
 - **Tempo slew**: how fast the detected tempo is allowed to move (rate limit), in units of 0.1 %/sec.
 - **Onset threshold**: how much a kick must stand out to count. Higher rejects more false hits.
 - **Noise gate** (0–50): an absolute loudness floor. A sound has to be at least this loud to count as a beat at all, no matter what else is happening. The scale is logarithmic — low values sit just above room silence, high values reach loud-venue levels — so each step matters more as you go up.
+- **Kick filter** (60–300 Hz): the low-pass cutoff that isolates "kick drum" energy before anything else is measured. Boomy sub-bass kicks sit well under 100 Hz; clicky or acoustic kicks carry meaningful attack energy up to 200–300 Hz. Get this wrong and no amount of threshold or gate tuning fully compensates, since the other four controls only ever see whatever this filter lets through.
 
-The web page shows a **live chart** of the microphone signal while you adjust these — the blue trace is the incoming energy, the orange dashed line is the onset threshold, the red dashed line is the noise gate, and green dots mark each detected beat. Drag the sliders and watch the trace cross the lines in real time, rather than guessing a number and listening afterward. Each slider applies immediately, live — there's no separate save step for these while tuning.
+Above the chart, a live readout shows the **measured BPM** (raw, from the last detected beat interval), the **Link BPM** (the smoothed tempo actually driving the session), and the tracking state (idle / searching / locked).
 
-Below the chart, a live readout shows the **measured BPM** (raw, from the last detected beat interval), the **Link BPM** (the smoothed tempo actually driving the session), the tracking state (idle / searching / locked), and a rolling 10-second count of **beats detected vs accepted**. Detected-but-not-accepted beats were outside the accept window — a high detect count with a low accept count means the detector hears rhythm that disagrees with the current tempo (wrong tempo anchor, or spurious hits).
+The web page shows a **live chart** of the microphone signal while you adjust these — the blue trace is the incoming energy, the orange dashed line is the onset threshold, the red dashed line is the noise gate, and green dots mark each detected beat. The vertical scale is fixed and logarithmic (never rescales, so a single loud transient can't throw off your reading), which conveniently means the noise gate line moves in a straight line with its slider. Drag the sliders and watch the trace cross the lines in real time, rather than guessing a number and listening afterward. Each slider applies immediately, live — there's no separate save step for these while tuning.
+
+Below the chart, a rolling 10-second count shows **beats detected vs accepted**. Detected-but-not-accepted beats were outside the accept window — a high detect count with a low accept count means the detector hears rhythm that disagrees with the current tempo (wrong tempo anchor, or spurious hits).
 
 The defaults work for typical four-on-the-floor material. For the full explanation of what each does and how to dial them in, see `BEAT_DETECTION.md`.
 
