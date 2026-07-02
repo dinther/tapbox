@@ -27,3 +27,6 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # OTA over HTTPS — common CA bundle (covers DigiCert/GitHub Pages, saves ~150 KB vs full)
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
+# WebSocket support for the live audio-tuning chart on the web config page
+CONFIG_HTTPD_WS_SUPPORT=y

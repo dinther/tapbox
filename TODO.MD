@@ -10,21 +10,33 @@ Done (v1.9.0):
 - Fixed: long-pressing select from edit mode now backs out to menu nav (discarding
   the in-progress edit) instead of exiting the whole menu
 - Mode bar moved from before the beat counter to the empty digit behind it
-
-Next up:
-- AP password: 8-digit numeric, obfuscated-from-MAC (not raw). Same PIN also gates
-  HTTP Basic Auth on the whole web config page (currently wide open to anyone on
-  the network) in both AP and normal network mode.
-- Live audio-tuning UI: WebSocket stream of energy/baseline/threshold/gate values,
-  rendered as a live strip chart on the web page, with sliders for the four mic
-  params instead of number fields. Mobile-friendly layout.
-
-Bugs:
-- tapbox.local doesn't resolve — there's no actual mDNS responder in the firmware,
-  just the text "tapbox.local" in the post-save HTML. esp_netif_set_hostname() only
-  sets the DHCP hostname option, it doesn't make .local resolution work. Needs
-  ESP-IDF's mdns component (mdns_init() + mdns_hostname_set("tapbox") + advertise
-  the HTTP service) on whichever interface is active.
+- AP password: 8-digit numeric derived from the MAC with a mixing step (not raw
+  MAC digits). Same PIN gates HTTP Basic Auth on the whole web config page (was
+  wide open to anyone on the network) in both AP and normal network mode. PIN is
+  shown on the display in every network mode's boot/reconnect scroll and via the
+  Addr menu item. Fixed: the PIN now fills the whole 8-digit display and holds
+  there for 6 seconds instead of scrolling straight past — it was unreadable.
+- Tried tapbox.local (ESP-IDF mdns component) to keep the web login working
+  across changing DHCP IPs. Got Ethernet<->STA switching working correctly
+  (mdns_netif_action on every interface change), but AP mode never reliably
+  reached clients (ESP32 SoftAP multicast-delivery limitation) and added
+  ongoing complexity for a device that isn't launched yet. Pulled out entirely
+  — back to plain IP addresses everywhere, shown on the display as before.
+- Live audio-tuning UI: added a WebSocket (/ws, CONFIG_HTTPD_WS_SUPPORT enabled
+  in sdkconfig.defaults) streaming energy/baseline/threshold/gate/onset at 20 Hz
+  to a live canvas chart on the web page (blue=energy, orange dashed=threshold,
+  red dashed=gate, green dots=detected beats). The four mic-tuning fields are
+  now sliders that apply live (throttled 200ms, via /apply) instead of requiring
+  a Save button press.
+  GOTCHA that cost several flashes: ESP-IDF 6.x completes the WS handshake
+  itself and never calls the uri handler for the handshake GET (httpd_uri.c
+  "do not call the uri->handler") — so the classic IDF 5.x pattern of capturing
+  the client fd in the handler silently gets nothing. Fix: enumerate clients
+  per-push with httpd_get_client_list() + httpd_ws_get_fd_info() ==
+  HTTPD_WS_CLIENT_WEBSOCKET, sending to every connected WS client. Also: WS
+  handshake is not gated by Basic Auth (browsers don't reliably attach
+  credentials to WS upgrades); channel is read-only telemetry so nothing to
+  protect. Verified end-to-end with a raw Python WS client: ~20Hz frames.
 
 Cosmetic (parked):
 - "uind" label is a rough abbreviation of "window" — consider a clearer label

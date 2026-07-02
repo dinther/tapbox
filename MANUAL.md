@@ -94,15 +94,19 @@ tapbox can connect to your WiFi network and run Ableton Link over it. This is us
 #### First-time WiFi setup
 
 1. Boot tapbox without an Ethernet cable plugged in.
-2. tapbox creates an open WiFi network called **tapbox** and scrolls `AP 192.168.4.1` across the display.
-3. Connect your phone or laptop to the **tapbox** network.
-4. Open **http://192.168.4.1** in your browser.
+2. tapbox creates a WiFi network called **tapbox** and scrolls `AP 192.168.4.1` followed by an 8-digit PIN across the display — the PIN fills the whole display and pauses there for 6 seconds so you have time to read it.
+3. Connect your phone or laptop to the **tapbox** network, using that PIN as the WiFi password.
+4. Open **http://192.168.4.1** in your browser. It will ask for a username and password — enter `tapbox` and the same PIN.
 5. Enter your WiFi network name (SSID) and password. The SSID field is case-sensitive — copy it exactly from your phone's WiFi list.
 6. Tap **Save Network — tapbox will reboot**. The device saves the credentials and reboots, then connects to your network as a WiFi client and scrolls `StA` followed by the assigned IP address.
 
+The PIN is derived from the device's own hardware, so it's fixed for the life of that unit and never needs to be written down — it follows the IP address on the display at every boot or reconnect, in any mode (Ethernet, WiFi, or AP), and is always available from the `Addr` item in the menu.
+
+> **What the PIN is for:** it exists to stop someone at a gig or in an office from wandering up to tapbox and casually changing your settings — it is not intended as strong security. Anyone determined enough to take the firmware apart could work out how the PIN is derived. Don't rely on it to protect anything beyond "keep the unsuspecting public out."
+
 #### Changing WiFi credentials later
 
-Unplug the Ethernet cable (or boot without one). If the stored credentials fail, tapbox falls back to AP mode automatically — connect to the **tapbox** network and open **http://192.168.4.1** to update them.
+Unplug the Ethernet cable (or boot without one). If the stored credentials fail, tapbox falls back to AP mode automatically — connect to the **tapbox** network using its PIN and open **http://192.168.4.1** to update them.
 
 #### Automatic Ethernet / WiFi switching
 
@@ -117,7 +121,7 @@ By default tapbox uses DHCP. If you need a fixed address, set `Lan.` to `Stat` o
 
 ### Web Configuration Page
 
-The config page is available at the device IP address on port 80 from any browser, over Ethernet or WiFi. It is split into two independent sections:
+The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via `Addr` in the menu). This applies every time, in every mode, since the page can change any setting on the device. The page is split into two independent sections:
 
 **Network** (WiFi SSID/password, network mode, static IP/subnet/gateway) — tap **Save Network — tapbox will reboot** to apply. The orange button is a reminder that a reboot follows. Network mode has three options — DHCP, Static, and Access Point — and static IP/subnet/gateway apply to whichever interface (Ethernet or WiFi) is active.
 
@@ -182,7 +186,11 @@ The four microphone beat-detector parameters are configured on the **web config 
 - **Accept window** (± BPM, 1–10): how far a detected beat may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
 - **Tempo slew**: how fast the detected tempo is allowed to move (rate limit), in units of 0.1 %/sec.
 - **Onset threshold**: how much a kick must stand out to count. Higher rejects more false hits.
-- **Noise gate** (0–50): an absolute loudness floor. A sound has to be at least this loud to count as a beat at all, no matter what else is happening.
+- **Noise gate** (0–50): an absolute loudness floor. A sound has to be at least this loud to count as a beat at all, no matter what else is happening. The scale is logarithmic — low values sit just above room silence, high values reach loud-venue levels — so each step matters more as you go up.
+
+The web page shows a **live chart** of the microphone signal while you adjust these — the blue trace is the incoming energy, the orange dashed line is the onset threshold, the red dashed line is the noise gate, and green dots mark each detected beat. Drag the sliders and watch the trace cross the lines in real time, rather than guessing a number and listening afterward. Each slider applies immediately, live — there's no separate save step for these while tuning.
+
+Below the chart, a live readout shows the **measured BPM** (raw, from the last detected beat interval), the **Link BPM** (the smoothed tempo actually driving the session), the tracking state (idle / searching / locked), and a rolling 10-second count of **beats detected vs accepted**. Detected-but-not-accepted beats were outside the accept window — a high detect count with a low accept count means the detector hears rhythm that disagrees with the current tempo (wrong tempo anchor, or spurious hits).
 
 The defaults work for typical four-on-the-floor material. For the full explanation of what each does and how to dial them in, see `BEAT_DETECTION.md`.
 
@@ -338,7 +346,7 @@ It is connected to the network but has not received any Link peers yet. This is 
 Ensure the other device (e.g. MadMapper on a laptop) is on the same network. Link uses UDP multicast — some routers do not bridge multicast between WiFi and Ethernet. If your PC is on Ethernet and tapbox is on WiFi, try connecting tapbox via Ethernet instead.
 
 **tapbox cannot find my WiFi network (or connects then immediately disconnects).**  
-Check that you entered the SSID exactly as it appears on your phone — SSIDs are case-sensitive. Also confirm the network is 2.4 GHz; the ESP32 cannot connect to 5 GHz networks. If credentials fail, tapbox falls back to AP mode automatically — connect to the **tapbox** network and open **http://192.168.4.1** to correct them.
+Check that you entered the SSID exactly as it appears on your phone — SSIDs are case-sensitive. Also confirm the network is 2.4 GHz; the ESP32 cannot connect to 5 GHz networks. If credentials fail, tapbox falls back to AP mode automatically — connect to the **tapbox** network using its PIN and open **http://192.168.4.1** to correct them.
 
 **My OSC messages are not reaching tapbox.**  
 Confirm the IP address on the display at next boot and update your OSC destination. If using a static IP, verify the address, subnet, and gateway are correct.
