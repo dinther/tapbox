@@ -96,6 +96,7 @@ static int g_mode     = MODE_AUDIO;    // 0=CDJ, 1=Audio (mic), 2=Manual
 // Mic / beat-detection tuning knobs (live-adjustable while tuning; folded into a
 // preset later). See [[project-inmp441-plan]].
 static int g_micWin   = 4;             // beat-accept window, ± BPM around tapped tempo (1–10)
+static int g_micGrid  = 0;             // accept-test A/B: 0 = chain+octave fold, 1 = phase grid (prototype; not persisted)
 static int g_micSlew  = 10;            // tempo slew limit, units of 0.1%/sec (0–50)
 static int g_micThr   = 8;             // onset threshold: energy > baseline*(1+thr/10) (0–30)
 static int g_micGate  = 17;           // absolute noise-gate floor (0–50, log scale: 10^(g/10)×1e-6)
@@ -160,7 +161,9 @@ static volatile double g_tele_energy    = 0.0;  // peak since last push; reset b
 static volatile double g_tele_baseline  = 0.0;
 static volatile double g_tele_threshold = 0.0;  // baseline * threshFactor, same units as energy
 static volatile double g_tele_gate      = 0.0;
-static volatile bool   g_tele_onset     = false;  // latched since last push; reset by push task
+static volatile uint8_t g_tele_onset    = 0;  // latched since last push (0=none 1=rejected 2=accepted); reset by push task
+static volatile float   g_tele_dev      = 999.f;  // folded-BPM deviation from anchor for the latched onset (999 = not judged)
+static volatile uint32_t g_tele_onsetMs = 0;      // tPeak of the latched onset (ms) — page anchors beat slots sub-tick
 // Running totals (wrap-safe on the client): every detected onset, and every
 // onset that passed the accept window and actually influenced the tempo.
 static volatile uint32_t g_tele_det = 0;
@@ -825,6 +828,9 @@ static bool form_field(const char *body, const char *key, char *out, int out_siz
 static esp_err_t http_get_root(httpd_req_t *req) {
     if (!http_check_auth(req)) return ESP_OK;
     httpd_resp_set_type(req, "text/html");
+    // Never let the browser cache this page — it's regenerated firmware UI, and a
+    // stale cached copy has already cost a debugging session (JS surviving flashes).
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     char tmp[192];
 
     httpd_resp_sendstr_chunk(req,
@@ -958,8 +964,25 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<div id=mstate>&hellip;</div>"
         "</div>"
         "<canvas id=mchart width=320 height=330></canvas>"
+        "<div id=mleg style=\"display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;"
+        "color:#888;margin:6px 0 2px\">"
+        "<span style=color:#0af>&#9644; energy</span>"
+        "<span style=color:#e90>&#9644; threshold</span>"
+        "<span style=color:#c33>&#9644; gate</span>"
+        "<span style=color:#2ecc71>&#9679; accepted</span>"
+        "<span style=color:#888>&#9711; rejected</span>"
+        "<span style=color:#B7F7A5>&#9615; expected beat</span>"
+        "</div>"
         "<div id=mstat>connecting&hellip;</div>"
         "<div class=mnum id=mnum2>&nbsp;</div>");
+
+    httpd_resp_sendstr_chunk(req, "<label>Accept test (A/B prototype)</label>");
+    snprintf(tmp, sizeof(tmp),
+        "<select name=mgrid onchange=\"applyField('mgrid',this.value)\">"
+        "<option value=0%s>Chain + octave fold</option>"
+        "<option value=1%s>Phase grid</option></select>",
+        g_micGrid == 0 ? " selected" : "", g_micGrid == 1 ? " selected" : "");
+    httpd_resp_sendstr_chunk(req, tmp);
 
     snprintf(tmp, sizeof(tmp), "<label>Accept window: <span id=mwinv>%d</span> &plusmn;BPM</label>", g_micWin);
     httpd_resp_sendstr_chunk(req, tmp);
@@ -1000,8 +1023,15 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<button type=button id=mrst class=btn-rst onclick=\"mDefaults()\">Reset Audio Defaults</button>"
         "<button class=btn-disp>Save Tuning</button>"
         "</form>"
-        "</div>"
+        "</div>");
 
+    // Firmware version stamp — makes a stale cached page obvious at a glance
+    snprintf(tmp, sizeof(tmp),
+        "<div style=\"margin-top:18px;font-size:11px;color:#555;text-align:center\">"
+        "tapbox firmware v%d.%d.%d</div>", FW_MAJOR, FW_MINOR, FW_PATCH);
+    httpd_resp_sendstr_chunk(req, tmp);
+
+    httpd_resp_sendstr_chunk(req,
         "<script>"
         "function tab(i){for(var j=0;j<3;j++){"
           "document.getElementById('t'+j).className=(j==i)?'tab on':'tab';"
@@ -1012,7 +1042,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "var st=document.querySelector('[name=net]').value=='1';"
           "['ip','sn','gw'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!st;});"
           "var au=document.querySelector('[name=mode]').value=='1';"
-          "['mwin','mslew','mthr','mgate','mfreq'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
+          "['mwin','mslew','mthr','mgate','mfreq','mgrid'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
           "mrst.disabled=!au;"
           "mchart.style.opacity=au?1:.35;"
           "mnote.style.display=au?'none':'block';"
@@ -1042,7 +1072,10 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "}"
         "}"
 
-        "var mHist=[],mStats=[];"
+        "var mHist=[],mStats=[],mLastMsg=0,mAnchor=0,mMarks=[];"
+        // Cached once — mDraw runs at display rate, no per-frame DOM lookups
+        "var mC=document.getElementById('mchart'),mCtx=mC.getContext('2d'),"
+        "mW=mC.width,mH=mC.height,mWinEl=document.querySelector('[name=mwin]');"
         "function mConnect(){"
           "var ws=new WebSocket('ws://'+location.host+'/ws');"
           "ws.onopen=function(){mstat.textContent='live';};"
@@ -1052,8 +1085,23 @@ static esp_err_t http_get_root(httpd_req_t *req) {
             "var p=ev.data.split(',');"
             "var pt={e:+p[0],b:+p[1],t:+p[2],g:+p[3],o:+p[4]};"
             "mHist.push(pt);"
-            "if(mHist.length>150)mHist.shift();"
-            "var raw=+p[5],trk=+p[6],st=+p[7];"
+            "if(mHist.length>60){mHist.shift();"  // 60 samples x 50ms = ~3s window
+              "for(var j=0;j<mMarks.length;j++)mMarks[j].x-=1;"
+              "if(mMarks.length&&mMarks[0].x<-10)mMarks.shift();"
+            "}"
+            "mLastMsg=performance.now();"
+            "var raw=+p[5],trk=+p[6],st=+p[7];mAnchor=+p[10]||0;"
+            // Expected-beat lines: each is created ONCE — an accepted beat puts the
+            // next line one period after itself (sub-tick via onset-age p[12]); a
+            // line whose time passes with no accepted beat spawns its successor one
+            // period later. Lines scroll with the chart and never move.
+            "if(mAnchor>0){"
+              "var i=mHist.length-1,P=1200/mAnchor;"
+              "if(pt.o===2)mMarks.push({x:i-(+p[12]||0)/50+P});"
+              "else if(mMarks.length){var t=mMarks[mMarks.length-1];"
+                "while(t.x<i){t={x:t.x+P};mMarks.push(t);}"
+              "}"
+            "}else mMarks=[];"
             "mrawv.textContent=raw?raw.toFixed(1):'\\u2014';"
             "mtrkv.textContent=trk?trk.toFixed(1):'\\u2014';"
             "mstate.textContent=st==2?'LOCKED':st==1?'SEARCHING':'IDLE';"
@@ -1065,19 +1113,40 @@ static esp_err_t http_get_root(httpd_req_t *req) {
               "var dd=(l.d-f.d+100000)%100000,da=(l.a-f.a+100000)%100000;"
               "mnum2.innerHTML='Last 10s: <b>'+dd+'</b> beats detected &nbsp;\\u00b7&nbsp; <b>'+da+'</b> accepted';"
             "}"
-            "mDraw();"
           "};"
         "}"
-        "function mDraw(){"
-          "var c=document.getElementById('mchart'),ctx=c.getContext('2d'),W=c.width,H=c.height;"
+        // Drawn by a requestAnimationFrame loop: frac (0..1) is progress toward
+        // the next 20 Hz data frame, so the scroll glides instead of stepping
+        // one sample (~5 px) at a time.
+        "function mDraw(frac){"
+          // Right edge = now. Upcoming windows scroll in from the right like
+          // everything else — the eye reads the scroll, no cursor needed.
+          "var ctx=mCtx,W=mW,H=mH;"
           "ctx.clearRect(0,0,W,H);"
           // Fixed log scale, 5 decades (1..1e5 chart units) — never rescales.
           "function y(v){return H-Math.max(0,Math.min(Math.log10(v<1?1:v)/5,1))*H;}"
+          "var n=mHist.length,per=W/((n-1)||1);"
+          // Sub-sample scroll only once the buffer is full (before that, nothing shifts)
+          "function xOf(v){return (v-(n>=60?frac:0))*per;}"
+          "function dot(x,yy,acc){"
+            "if(acc){ctx.fillStyle='#2ecc71';"
+              "ctx.beginPath();ctx.arc(x,yy,3.5,0,7);ctx.fill();}"
+            "else{ctx.strokeStyle='#888';ctx.lineWidth=1.5;"
+              "ctx.beginPath();ctx.arc(x,yy,3,0,7);ctx.stroke();}"
+          "}"
+          // Expected-beat line: where the perfect next beat should fall
+          "function band(x){var xc=xOf(x);"
+            "if(xc<0||xc>W)return;"
+            "ctx.strokeStyle='rgba(183,247,165,0.8)';ctx.lineWidth=1;ctx.setLineDash([2,3]);"
+            "ctx.beginPath();ctx.moveTo(xc,0);ctx.lineTo(xc,H);ctx.stroke();ctx.setLineDash([]);"
+          "}"
           // Faint decade gridlines (10, 100, 1k, 10k)
           "ctx.strokeStyle='#1e1e1e';ctx.lineWidth=1;ctx.setLineDash([]);"
           "for(var d=1;d<5;d++){var gy=y(Math.pow(10,d));"
             "ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}"
-          "var last=mHist[mHist.length-1]||{t:0,g:0};"
+          // All expected-beat lines — created once, scroll with the chart
+          "for(var m=0;m<mMarks.length;m++)band(mMarks[m].x);"
+          "var last=mHist[n-1]||{t:0,g:0};"
           "ctx.lineWidth=2;"
           "ctx.strokeStyle='#e90';ctx.setLineDash([4,3]);"
           "ctx.beginPath();ctx.moveTo(0,y(last.t));ctx.lineTo(W,y(last.t));ctx.stroke();"
@@ -1085,18 +1154,28 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "ctx.beginPath();ctx.moveTo(0,y(last.g));ctx.lineTo(W,y(last.g));ctx.stroke();"
           "ctx.setLineDash([]);"
           "ctx.strokeStyle='#0af';ctx.lineWidth=2;ctx.beginPath();"
-          "for(var i=0;i<mHist.length;i++){"
-            "var x=i/((mHist.length-1)||1)*W;"
+          "for(var i=0;i<n;i++){"
+            "var x=xOf(i);"
             "if(i===0)ctx.moveTo(x,y(mHist[i].e));else ctx.lineTo(x,y(mHist[i].e));"
           "}"
           "ctx.stroke();"
-          "ctx.fillStyle='#2ecc71';"
-          "for(var i=0;i<mHist.length;i++){"
-            "if(mHist[i].o){var x=i/((mHist.length-1)||1)*W;"
-              "ctx.beginPath();ctx.arc(x,y(mHist[i].e),3,0,7);ctx.fill();}"
-          "}"
+          // Onset dots sit ON the energy-trace vertices (green filled = accepted)
+          "for(var i=0;i<n;i++){if(mHist[i].o)dot(xOf(i),y(mHist[i].e),mHist[i].o===2);}"
         "}"
-        "mConnect();"
+        // Dev hook: ?js=http://<pc-ip>:8000/tuning.js loads the chart code from an
+        // external server (docs/tuning.js) INSTEAD of starting the embedded copy —
+        // its later definitions shadow the ones above. Edit + F5, no reflash.
+        "var mExt=new URLSearchParams(location.search).get('js');"
+        "if(mExt){var _s=document.createElement('script');"
+          // Cache-buster: dynamically injected scripts dodge Ctrl+F5, and
+          // python http.server sends no Cache-Control — force a fresh fetch
+          "_s.src=mExt+(mExt.indexOf('?')<0?'?':'&')+'t='+Date.now();"
+          "document.body.appendChild(_s);}"
+        "else{mConnect();"
+        "(function mAnim(){"
+          "mDraw(mLastMsg?Math.min((performance.now()-mLastMsg)/50,1):0);"
+          "requestAnimationFrame(mAnim);"
+        "})();}"
         "</script></body></html>");
     httpd_resp_sendstr_chunk(req, nullptr);
     return ESP_OK;
@@ -1157,6 +1236,7 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
     if (form_field(body, "mode", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 2)          g_mode     = v; }
     if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 3)           g_brit     = v; }
     if (form_field(body, "mwin", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 10)           g_micWin   = v; }
+    if (form_field(body, "mgrid",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v == 0 || v == 1)            g_micGrid  = v; }
     if (form_field(body, "mslew",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micSlew  = v; }
     if (form_field(body, "mthr", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 30)           g_micThr   = v; }
     if (form_field(body, "mgate",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micGate  = v; }
@@ -1241,16 +1321,19 @@ static void ws_push_task(void *) {
         if (!ws_client_connected()) continue;
         WsPushArg *a = (WsPushArg *)malloc(sizeof(WsPushArg));
         if (!a) continue;
-        // e,baseline,threshold,gate,onset,rawBPM,trackedBPM,state,detected,accepted
-        snprintf(a->text, sizeof(a->text), "%.0f,%.0f,%.0f,%.0f,%d,%.1f,%.1f,%d,%u,%u",
+        // e,baseline,threshold,gate,onset(0/1/2),rawBPM,trackedBPM,state,detected,accepted,anchorBPM,devBPM,onsetAgeMs
+        uint32_t age = g_tele_onset ? (now_ms() - g_tele_onsetMs) : 0;
+        if (age > 99) age = 99;
+        snprintf(a->text, sizeof(a->text), "%.0f,%.0f,%.0f,%.0f,%d,%.1f,%.1f,%d,%u,%u,%.1f,%.1f,%u",
                  g_tele_energy * 1e6, g_tele_baseline * 1e6,
                  g_tele_threshold * 1e6, g_tele_gate * 1e6,
-                 g_tele_onset ? 1 : 0,
+                 (int)g_tele_onset,
                  (double)g_mic_bpm, (double)g_mic_tracked,
                  g_mic_locked ? 2 : (g_mic_armed ? 1 : 0),
-                 (unsigned)(g_tele_det % 100000), (unsigned)(g_tele_acc % 100000));
+                 (unsigned)(g_tele_det % 100000), (unsigned)(g_tele_acc % 100000),
+                 (double)g_mic_tapAnchor, (double)g_tele_dev, (unsigned)age);
         g_tele_energy = 0.0;      // restart peak-hold window
-        g_tele_onset  = false;    // consume the latched beat
+        g_tele_onset  = 0;        // consume the latched beat (0=none 1=rejected 2=accepted)
         if (httpd_queue_work(s_httpd, ws_send_async, a) != ESP_OK) free(a);
     }
 }
@@ -2037,7 +2120,9 @@ static void mic_task(void *) {
         g_tele_baseline  = baseline;
         g_tele_threshold = baseline * threshFactor;
         g_tele_gate      = gate;
-        if (onset) { g_tele_onset = true; g_tele_det = g_tele_det + 1; }  // latched until next push
+        if (onset) { g_tele_onset = 1; g_tele_det = g_tele_det + 1;   // 1=detected; upgraded to 2 if accepted
+                     g_tele_dev = 999.f;                              // overwritten below if judged
+                     g_tele_onsetMs = (uint32_t)(tPeak / 1000ULL); }
 
         if (onset) {
             if (lastOnsetUs != 0) {
@@ -2065,21 +2150,76 @@ static void mic_task(void *) {
                         aInt = interval;
                         aBpm = bpm;
                     }
-                    if (aBpm >= 25.0 && aBpm <= 220.0) {
-                        double cand = aBpm;
-                        while (cand > anchor * 1.4) cand *= 0.5;   // fold octaves to anchor
-                        while (cand < anchor * 0.7) cand *= 2.0;
-                        double tol = (double)g_micWin;   // accept window, ± BPM
-                        if (fabs(cand - anchor) <= tol) {
+                    // ── Accept test, A/B selectable on the web page (g_micGrid).
+                    // Both branches only decide accept/reject and the clean 1-beat
+                    // interval; everything downstream (EMA, deadband, slew, clamp,
+                    // lock, phase-lock) is shared so the A/B comparison is fair.
+                    bool   accepted = false;
+                    double candBpm  = anchor;   // tempo target fallback before the EMA has data
+                    double cleanInt = 0.0;      // 1-beat interval for the EMA (0 = don't feed)
+                    uint64_t accAnchorUs = tPeak; // next chain reference (grid mode may not fully trust the beat)
+                    if (!g_micGrid) {
+                        // A (production): fold the interval-BPM into the anchor's
+                        // octave, accept within ±win BPM of the anchor. Only
+                        // un-folded (true 1-beat) intervals feed the tempo EMA.
+                        if (aBpm >= 25.0 && aBpm <= 220.0) {
+                            double cand = aBpm;
+                            while (cand > anchor * 1.4) cand *= 0.5;   // fold octaves to anchor
+                            while (cand < anchor * 0.7) cand *= 2.0;
+                            double tol = (double)g_micWin;   // accept window, ± BPM
+                            g_tele_dev = (float)(cand - anchor);  // telemetry: the exact judged quantity
+                            if (fabs(cand - anchor) <= tol) {
+                                accepted = true;
+                                candBpm  = cand;
+                                if (cand == aBpm) cleanInt = aInt;   // un-folded → true 1-beat
+                            }
+                        }
+                    } else {
+                        // B (prototype): phase grid — accept if the onset lands within
+                        // ±w ms of ANY whole number of beats after the last accepted
+                        // beat. Constant time tolerance (onset jitter doesn't grow
+                        // with gap length), no octave folding, and a 3-beat gap is on
+                        // the pulse (two misses) so it is accepted — the fold can't do
+                        // that. Off-pulse hits (e.g. 1.5 beats) are maximally far from
+                        // the grid and rejected. ±win BPM is mapped to ms at 1 beat.
+                        double ref = (g_mic_tracked > 0.0) ? g_mic_tracked : anchor;
+                        double P   = 60000.0 / ref;                 // beat period, ms
+                        double w   = P * (double)g_micWin / ref;    // ±win BPM → ±ms
+                        double k   = floor(aInt / P + 0.5);         // nearest grid multiple
+                        if (k >= 1.0 && aInt <= 2400.0) {           // same freshness limit as the chain
+                            double err = aInt - k * P;              // ms off the grid
+                            g_tele_dev = (float)err;                // telemetry: ms here (BPM in mode A)
+                            if (fabs(err) <= w) {
+                                accepted = true;
+                                cleanInt = aInt / k;                // every accept yields a per-beat estimate
+                                candBpm  = 60000.0 / cleanInt;
+                                // Quality-weighted re-anchor: a beat dead on the grid
+                                // (q→1) pulls the reference hard; one scraping the
+                                // window edge (q→0) barely nudges it. Never 100% —
+                                // one noisy beat must not become the whole reference.
+                                // v1 anchored fully to tPeak and the grid inherited
+                                // every beat's timing jitter; this is the fix.
+                                if (lastAccUs != 0) {
+                                    double q    = 1.0 - fabs(err) / w;      // 1 = centre, 0 = edge
+                                    double keep = (1.0 - 0.8 * q) * err;    // ms of error NOT adopted (gmax = 0.8)
+                                    accAnchorUs = (uint64_t)((int64_t)tPeak - (int64_t)llround(keep * 1000.0));
+                                }
+                            }
+                        }
+                    }
+                    {
+                        if (accepted) {
                             g_tele_acc = g_tele_acc + 1;
-                            lastAccUs = tPeak;
+                            g_tele_onset = 2;   // this beat passed the accept test
+
+                            lastAccUs = accAnchorUs;  // mode A: = tPeak; grid mode: quality-weighted
                             // Average the clean ~1-beat interval (EMA) → accurate, continuous
                             // tempo, unbiased (interval domain) and free of the 8 ms grid.
-                            if (cand == aBpm) {                      // un-folded → true 1-beat
-                                if (avgInterval <= 0.0) avgInterval = aInt;
-                                else                    avgInterval += 0.08 * (aInt - avgInterval);
+                            if (cleanInt > 0.0) {
+                                if (avgInterval <= 0.0) avgInterval = cleanInt;
+                                else                    avgInterval += 0.08 * (cleanInt - avgInterval);
                             }
-                            double target = (avgInterval > 0.0) ? (60000.0 / avgInterval) : cand;
+                            double target = (avgInterval > 0.0) ? (60000.0 / avgInterval) : candBpm;
 
                             // Deadband: once trk is within ~0.4 BPM of the target, freeze it
                             // so the displayed tempo stops flickering. Genuine drift beyond

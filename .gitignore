@@ -1,4 +1,5 @@
 .pio/
 .claude/
+.vscode/
 managed_components/
 sdkconfig.wt32-eth01
