@@ -40,6 +40,9 @@ Done (v1.9.0):
 
 Cosmetic (parked):
 - display.jpg needs retaking — the mode bar moved position on the physical layout
+- tapbox_web_config_BPM_tuner.png needs retaking — Kick filter slider removed,
+  Accept test A/B selector removed, new Log tab added (DSP pipeline rewrite,
+  see BEAT_DETECTION.md §2)
 - MANUAL.md cleanup pass once the above lands
 - DONE: BPM tuning graph now plots on a fixed log scale (5 decades, faint
   decade gridlines) — never rescales. Bonus: the log gate slider now maps

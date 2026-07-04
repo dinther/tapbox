@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <cmath>
 #include <string.h>
+#include <cstdarg>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -24,6 +25,16 @@
 #include "esp_wifi.h"
 #include "esp_http_server.h"
 #include "esp_mac.h"
+
+#include "dsp/ring_buffer.h"
+#include "dsp/fft_processor.h"
+#include "dsp/band_aggregator.h"
+#include "dsp/agc.h"
+#include "dsp/onset_detector.h"
+#include "dsp/silence_detector.h"
+#include "dsp/mel_filterbank.h"
+#include "dsp/superflux_onset.h"
+#include "dsp/btrack.h"
 
 // ── Pin assignments ────────────────────────────────────────────────────────────
 #define PIN_TAP_BUTTON  GPIO_NUM_35  // input-only — needs external 10k pullup to 3V3
@@ -96,11 +107,9 @@ static int g_mode     = MODE_AUDIO;    // 0=CDJ, 1=Audio (mic), 2=Manual
 // Mic / beat-detection tuning knobs (live-adjustable while tuning; folded into a
 // preset later). See [[project-inmp441-plan]].
 static int g_micWin   = 4;             // beat-accept window, ± BPM around tapped tempo (1–10)
-static int g_micGrid  = 0;             // accept-test A/B: 0 = chain+octave fold, 1 = phase grid (prototype; not persisted)
 static int g_micSlew  = 10;            // tempo slew limit, units of 0.1%/sec (0–50)
 static int g_micThr   = 8;             // onset threshold: energy > baseline*(1+thr/10) (0–30)
 static int g_micGate  = 17;           // absolute noise-gate floor (0–50, log scale: 10^(g/10)×1e-6)
-static int g_micFreq  = 150;           // kick-band low-pass cutoff, Hz (60–300)
 static int g_ip[4]    = {192, 168,   1, 200};
 static int g_sn[4]    = {255, 255, 255,   0};
 static int g_gt[4]    = {192, 168,   1,   1};
@@ -112,7 +121,7 @@ static char g_wifi_pass[64] = {};
 struct RtcSettings {
     uint32_t magic;
     int sigIdx, brit, net, mode;
-    int micWin, micSlew, micThr, micGate, micFreq;
+    int micWin, micSlew, micThr, micGate;
     int ip[4], sn[4], gt[4];
     char wifi_ssid[64], wifi_pass[64];
 };
@@ -153,13 +162,13 @@ static volatile bool     g_mic_armed  = false;  // a tap has anchored the tracke
 static volatile double   g_mic_tracked = 0.0;   // adaptive anchor / applied BPM
 static volatile double   g_mic_tapAnchor = 0.0; // last tap-set tempo (clamp reference)
 
-// Live telemetry for the web page's audio-tuning chart — written every mic
-// block (~4 ms), read every 50 ms by the WS push task. Energy is peak-held and
-// onset is latched between pushes: the mic loop runs ~12x faster than the
-// chart, so plain sampling would miss most kick peaks and detected beats.
+// Live telemetry for the web page's audio-tuning chart — written by mic_task's
+// 20Hz onset/beat-tracking step, read every 50ms by the WS push task. Energy
+// is still peak-held and onset still latched between pushes so a push landing
+// mid-cycle can't miss a detection.
 static volatile double g_tele_energy    = 0.0;  // peak since last push; reset by push task
 static volatile double g_tele_baseline  = 0.0;
-static volatile double g_tele_threshold = 0.0;  // baseline * threshFactor, same units as energy
+static volatile double g_tele_threshold = 0.0;  // OnsetDetector's adaptive threshold, same units as energy
 static volatile double g_tele_gate      = 0.0;
 static volatile uint8_t g_tele_onset    = 0;  // latched since last push (0=none 1=rejected 2=accepted); reset by push task
 static volatile float   g_tele_dev      = 999.f;  // folded-BPM deviation from anchor for the latched onset (999 = not judged)
@@ -260,7 +269,6 @@ static void nvs_load_settings() {
     if (nvs_get_i32(h, "mslew",&v) == ESP_OK && v >= 0 && v <= 50)         g_micSlew  = (int)v;
     if (nvs_get_i32(h, "mthr", &v) == ESP_OK && v >= 0 && v <= 30)         g_micThr   = (int)v;
     if (nvs_get_i32(h, "mgate",&v) == ESP_OK && v >= 0 && v <= 50)         g_micGate  = (int)v;
-    if (nvs_get_i32(h, "mfreq",&v) == ESP_OK && v >= 60 && v <= 300)       g_micFreq  = (int)v;
     if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 2)          g_net      = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]    = (int)v;
     if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]    = (int)v;
@@ -292,7 +300,6 @@ static void nvs_save_settings() {
     nvs_set_i32(h, "mslew",(int32_t)g_micSlew);
     nvs_set_i32(h, "mthr", (int32_t)g_micThr);
     nvs_set_i32(h, "mgate",(int32_t)g_micGate);
-    nvs_set_i32(h, "mfreq",(int32_t)g_micFreq);
     nvs_set_i32(h, "net",  (int32_t)g_net);
     nvs_set_i32(h, "ip0",  (int32_t)g_ip[0]);
     nvs_set_i32(h, "ip1",  (int32_t)g_ip[1]);
@@ -312,7 +319,7 @@ static void nvs_save_settings() {
 
 static void factory_reset() {
     g_sigIdx = 2; g_brit = 1; g_mode = MODE_AUDIO;
-    g_micWin = 4; g_micSlew = 10; g_micThr = 8; g_micGate = 17; g_micFreq = 150;
+    g_micWin = 4; g_micSlew = 10; g_micThr = 8; g_micGate = 17;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
@@ -765,7 +772,7 @@ static void rtc_save_settings() {
     s_rtc.sigIdx   = g_sigIdx;
     s_rtc.brit     = g_brit;     s_rtc.mode     = g_mode;    s_rtc.net = g_net;
     s_rtc.micWin   = g_micWin;   s_rtc.micSlew  = g_micSlew;
-    s_rtc.micThr   = g_micThr;   s_rtc.micGate  = g_micGate; s_rtc.micFreq = g_micFreq;
+    s_rtc.micThr   = g_micThr;   s_rtc.micGate  = g_micGate;
     for (int i = 0; i < 4; i++) { s_rtc.ip[i] = g_ip[i]; s_rtc.sn[i] = g_sn[i]; s_rtc.gt[i] = g_gt[i]; }
     strncpy(s_rtc.wifi_ssid, g_wifi_ssid, sizeof(s_rtc.wifi_ssid));
     strncpy(s_rtc.wifi_pass, g_wifi_pass, sizeof(s_rtc.wifi_pass));
@@ -785,7 +792,6 @@ static void rtc_restore_to_nvs_if_valid() {
     nvs_set_i32(h, "mslew",     s_rtc.micSlew);
     nvs_set_i32(h, "mthr",      s_rtc.micThr);
     nvs_set_i32(h, "mgate",     s_rtc.micGate);
-    nvs_set_i32(h, "mfreq",     s_rtc.micFreq);
     nvs_set_i32(h, "net",       s_rtc.net);
     nvs_set_i32(h, "ip0",  s_rtc.ip[0]); nvs_set_i32(h, "ip1",  s_rtc.ip[1]);
     nvs_set_i32(h, "ip2",  s_rtc.ip[2]); nvs_set_i32(h, "ip3",  s_rtc.ip[3]);
@@ -882,6 +888,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<button type=button class=\"tb on\" onclick=\"tab(0)\">Network</button>"
         "<button type=button class=tb onclick=\"tab(1)\">Settings</button>"
         "<button type=button class=tb onclick=\"tab(2)\">BPM tuning</button>"
+        "<button type=button class=tb onclick=\"tab(3)\">Log</button>"
         "</div>"
 
         "<div class=\"tab on\" id=t0>"
@@ -976,14 +983,6 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<div id=mstat>connecting&hellip;</div>"
         "<div class=mnum id=mnum2>&nbsp;</div>");
 
-    httpd_resp_sendstr_chunk(req, "<label>Accept test (A/B prototype)</label>");
-    snprintf(tmp, sizeof(tmp),
-        "<select name=mgrid onchange=\"applyField('mgrid',this.value)\">"
-        "<option value=0%s>Chain + octave fold</option>"
-        "<option value=1%s>Phase grid</option></select>",
-        g_micGrid == 0 ? " selected" : "", g_micGrid == 1 ? " selected" : "");
-    httpd_resp_sendstr_chunk(req, tmp);
-
     snprintf(tmp, sizeof(tmp), "<label>Accept window: <span id=mwinv>%d</span> &plusmn;BPM</label>", g_micWin);
     httpd_resp_sendstr_chunk(req, tmp);
     snprintf(tmp, sizeof(tmp),
@@ -1012,17 +1011,18 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "oninput=\"mgatev.textContent=this.value;applyField('mgate',this.value)\">", g_micGate);
     httpd_resp_sendstr_chunk(req, tmp);
 
-    snprintf(tmp, sizeof(tmp), "<label>Kick filter: <span id=mfreqv>%d</span> Hz</label>", g_micFreq);
-    httpd_resp_sendstr_chunk(req, tmp);
-    snprintf(tmp, sizeof(tmp),
-        "<input name=mfreq type=range min=60 max=300 step=5 value=%d "
-        "oninput=\"mfreqv.textContent=this.value;applyField('mfreq',this.value)\">", g_micFreq);
-    httpd_resp_sendstr_chunk(req, tmp);
-
     httpd_resp_sendstr_chunk(req,
         "<button type=button id=mrst class=btn-rst onclick=\"mDefaults()\">Reset Audio Defaults</button>"
         "<button class=btn-disp>Save Tuning</button>"
         "</form>"
+        "</div>"
+
+        "<div class=tab id=t3>"
+        "<h3>Live Log</h3>"
+        "<div class=mnum style=\"color:#777\">Tap/arm/lock events, most recent at the bottom.</div>"
+        "<pre id=logbox style=\"background:#111;color:#B7F7A5;font-size:12px;line-height:1.4;"
+        "height:360px;overflow-y:auto;padding:8px;border-radius:4px;margin:8px 0 0;"
+        "white-space:pre-wrap;word-break:break-word\"></pre>"
         "</div>");
 
     // Firmware version stamp — makes a stale cached page obvious at a glance
@@ -1033,7 +1033,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
 
     httpd_resp_sendstr_chunk(req,
         "<script>"
-        "function tab(i){for(var j=0;j<3;j++){"
+        "function tab(i){for(var j=0;j<4;j++){"
           "document.getElementById('t'+j).className=(j==i)?'tab on':'tab';"
           "document.getElementsByClassName('tb')[j].className=(j==i)?'tb on':'tb';"
         "}}"
@@ -1042,7 +1042,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "var st=document.querySelector('[name=net]').value=='1';"
           "['ip','sn','gw'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!st;});"
           "var au=document.querySelector('[name=mode]').value=='1';"
-          "['mwin','mslew','mthr','mgate','mfreq','mgrid'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
+          "['mwin','mslew','mthr','mgate'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
           "mrst.disabled=!au;"
           "mchart.style.opacity=au?1:.35;"
           "mnote.style.display=au?'none':'block';"
@@ -1064,7 +1064,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
 
         // Must mirror the firmware defaults in factory_reset()
         "function mDefaults(){"
-          "var d={mwin:4,mslew:10,mthr:8,mgate:17,mfreq:150};"
+          "var d={mwin:4,mslew:10,mthr:8,mgate:17};"
           "for(var k in d){"
             "document.querySelector('[name='+k+']').value=d[k];"
             "document.getElementById(k+'v').textContent=d[k];"
@@ -1072,7 +1072,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "}"
         "}"
 
-        "var mHist=[],mStats=[],mLastMsg=0,mAnchor=0,mMarks=[];"
+        "var mHist=[],mStats=[],mLastMsg=0,mAnchor=0,mMarks=[],logLines=[];"
         // Cached once — mDraw runs at display rate, no per-frame DOM lookups
         "var mC=document.getElementById('mchart'),mCtx=mC.getContext('2d'),"
         "mW=mC.width,mH=mC.height,mWinEl=document.querySelector('[name=mwin]');"
@@ -1082,6 +1082,13 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "ws.onclose=function(){mstat.textContent='disconnected \\u2014 retrying\\u2026';setTimeout(mConnect,2000);};"
           "ws.onerror=function(){ws.close();};"
           "ws.onmessage=function(ev){"
+            "if(ev.data.charAt(0)==='L'){"
+              "logLines.push(ev.data.substring(1));"
+              "if(logLines.length>300)logLines.shift();"
+              "var lb=document.getElementById('logbox');"
+              "if(lb){lb.textContent=logLines.join('\\n');lb.scrollTop=lb.scrollHeight;}"
+              "return;"
+            "}"
             "var p=ev.data.split(',');"
             "var pt={e:+p[0],b:+p[1],t:+p[2],g:+p[3],o:+p[4]};"
             "mHist.push(pt);"
@@ -1236,11 +1243,9 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
     if (form_field(body, "mode", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 2)          g_mode     = v; }
     if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 3)           g_brit     = v; }
     if (form_field(body, "mwin", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 10)           g_micWin   = v; }
-    if (form_field(body, "mgrid",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v == 0 || v == 1)            g_micGrid  = v; }
     if (form_field(body, "mslew",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micSlew  = v; }
     if (form_field(body, "mthr", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 30)           g_micThr   = v; }
     if (form_field(body, "mgate",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micGate  = v; }
-    if (form_field(body, "mfreq",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 60 && v <= 300)          g_micFreq  = v; }
     free(body);
 
     nvs_save_settings();
@@ -1310,6 +1315,23 @@ static bool ws_client_connected() {
     for (size_t i = 0; i < n; i++)
         if (httpd_ws_get_fd_info(s_httpd, fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) return true;
     return false;
+}
+
+// Pushes a short human-readable event line to the web page's Log tab, over
+// the same /ws channel the 20 Hz telemetry CSV uses. Prefixed 'L' so the
+// client JS can tell the two apart (the CSV always starts with a digit).
+// For notable one-off events only (taps, lock transitions) — not a firehose;
+// the periodic status line stays on serial only.
+static void ws_log(const char *fmt, ...) {
+    if (!ws_client_connected()) return;
+    WsPushArg *a = (WsPushArg *)malloc(sizeof(WsPushArg));
+    if (!a) return;
+    int off = snprintf(a->text, sizeof(a->text), "L%.1f ", now_ms() / 1000.0);
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(a->text + off, sizeof(a->text) - off, fmt, ap);
+    va_end(ap);
+    if (httpd_queue_work(s_httpd, ws_send_async, a) != ESP_OK) free(a);
 }
 
 // Pushes energy/baseline/threshold/gate/onset at 20 Hz to whichever browser
@@ -1551,11 +1573,13 @@ static void do_tap() {
             g_mic_tapAnchor = tapTempo.bpm();
             g_mic_armed     = true;
             printf("Audio: tap override %.1f BPM\n", tapTempo.bpm());
+            ws_log("Audio: tap override %.1f BPM", tapTempo.bpm());
         } else if (g_mic_armed) {
             // Already tracking → a lone tap only re-asserts the downbeat at the
             // current tempo. The mic owns BPM, so do NOT change it.
             if (linkEnabled) reset_downbeat();
             printf("Audio: downbeat re-synced at %.1f BPM\n", (double)g_mic_tracked);
+            ws_log("Audio: downbeat re-synced at %.1f BPM", (double)g_mic_tracked);
         } else {
             // First tap → arm the tracker with the mic's current estimate,
             // downbeat = now.
@@ -1567,6 +1591,7 @@ static void do_tap() {
             g_mic_tapAnchor = seed;
             g_mic_armed     = true;
             printf("Audio: armed at %.1f BPM (mic %.1f)\n", seed, (double)g_mic_bpm);
+            ws_log("Audio: armed at %.1f BPM (mic %.1f)", seed, (double)g_mic_bpm);
         }
         return;
     }
@@ -2053,21 +2078,68 @@ static void init_i2s_mic() {
     }
 }
 
-// Energy-based kick-band beat detector with tap-anchored, octave-folded,
-// slew-limited BPM tracking. See [[project-inmp441-plan]].
+// FFT-based spectral-flux onset detector + autocorrelation BPM tracker, with
+// tap-anchored, slew-limited BPM application onto Ableton Link. DSP core
+// ported (basic tier) from absent42/esphome-audio-reactive (MIT). See
+// [[project-inmp441-plan]].
 static void mic_task(void *) {
     if (!s_i2s_rx) { vTaskDelete(nullptr); return; }
     abl_link_session_state mic_sess = abl_link_create_session_state();
 
+    static constexpr size_t FFT_SIZE = 1024;
+    static constexpr size_t HOP_SIZE = 512;
+    // Not yet tunable from hardware — starting values from the vendor's own
+    // basic-tier defaults / CSV convention; expect to retune once flashed
+    // (mic self-noise and room acoustics aren't derivable analytically).
+    static constexpr float kRawScale      = 1.0f / 20.0f;
+    // Calibrated from real hardware logs (basic-tier pipeline): raw spectral
+    // flux runs ~1e-8..4e-7, while g_micGate's formula (10^(g/10)*1e-6)
+    // bottoms out at ~1.26e-6 for any nonzero slider value — flux needed
+    // pulling up ~2 orders of magnitude to land in the gate's usable range.
+    // Still an approximation; revisit once there's a clear kick-vs-quiet
+    // contrast to tune against. Telemetry-only — BTrack/SuperFlux below own
+    // the actual tempo tracking now, not gated by this.
+    static constexpr float kTeleFluxScale = 100.0f;
+
     static int32_t samples[256];
-    double   lp = 0.0, hp = 0.0, xprev = 0.0;  // band-pass state
-    double   baseline = 0.0;                    // adaptive energy floor
-    uint32_t lastOnset = 0, lastApply = 0, lastDbg = 0;
-    uint64_t lastOnsetUs = 0;                   // precise (sub-frame) onset time
-    uint64_t lastAccUs   = 0;                   // last ACCEPTED onset — beat-chain reference
-    int      consec = 0;
-    double   avgInterval   = 0.0;               // EMA of clean inter-beat interval (ms)
-    double   lastTapAnchor = 0.0;               // detect re-arm → reset the average
+    static float norm[128];
+    static float fftBuf[FFT_SIZE];
+    static float magsSq[FFT_SIZE / 2];
+    static float melFrame[32];
+    static audio_dsp::RingBuffer<float, 2048> ring;
+    static audio_dsp::FFTProcessor<FFT_SIZE> fft(MIC_SAMPLE_RATE);
+    static audio_dsp::BandAggregator bandAgg(MIC_SAMPLE_RATE, FFT_SIZE);
+    static audio_dsp::AGC agcBass(audio_dsp::AGC_NORMAL);
+    static audio_dsp::AGC agcMid(audio_dsp::AGC_NORMAL);
+    static audio_dsp::AGC agcHigh(audio_dsp::AGC_NORMAL);
+    static audio_dsp::AGC agcAmp(audio_dsp::AGC_NORMAL);
+    // Gate disabled (squelch=0 -> threshold=0 -> never below gate) until real
+    // hardware signal levels are known. The vendor's own default (10.0, i.e.
+    // threshold=5.0) assumes their FFT/mic gain scale, which is not ours —
+    // leaving it in caused onsetDet.update() to never run at all (flux/mean/
+    // threshold telemetry frozen). TUNE ON HARDWARE once real band-energy
+    // magnitudes are observed.
+    static audio_dsp::SilenceDetector silenceDet(0.0f);
+    // Basic-tier onset detector — kept ONLY for the tuning-chart telemetry
+    // (flux/mean/threshold), already calibrated against real hardware. It no
+    // longer drives the tempo; BTrack/SuperFlux below do that.
+    static audio_dsp::OnsetDetector onsetDet(50, audio_dsp::OnsetDetector::MODE_SPECTRAL_FLUX, 60, 150);
+    static audio_dsp::BandEnergies16 latestEnergies{};
+
+    // Pro-tier tempo pipeline — runs every FFT hop (62.5Hz), NOT decoupled to
+    // the slower 20Hz telemetry poll below: BTrack::process() is a stateful
+    // per-frame machine (internal countdown timers) that must be fed every
+    // hop to behave correctly, unlike the old BeatTracker it replaces.
+    static audio_dsp::MelFilterbank<32, FFT_SIZE> melFb;
+    static audio_dsp::SuperFluxOnset<32> superflux;
+    static audio_dsp::BTrack btrack;
+    static audio_dsp::BTrack::Result latestBTrackResult{};
+    melFb.setup(MIC_SAMPLE_RATE, 80.0f, 16000.0f);
+
+    uint32_t lastOnset = 0, lastApply = 0, lastDbg = 0, lastPollMs = 0;
+    int      consec   = 0;
+    bool     wasAudio  = (g_mode == MODE_AUDIO);
+
     while (true) {
         size_t br = 0;
         if (i2s_channel_read(s_i2s_rx, samples, sizeof(samples), &br, pdMS_TO_TICKS(100)) != ESP_OK)
@@ -2075,192 +2147,156 @@ static void mic_task(void *) {
         int n = (int)(br / sizeof(int32_t));
         if (n <= 0) continue;
 
-        // Single-pole low-pass coefficient for the current cutoff (recomputed
-        // every block so the tuning slider takes effect live).
-        double alpha = 1.0 - exp(-2.0 * M_PI * (double)g_micFreq / MIC_SAMPLE_RATE);
-
-        double energy  = 0.0;
-        int    cnt     = 0;
-        double peakE   = 0.0;                               // sub-frame onset timing:
-        int    peakIdx = 0;                                 // loudest sample in the block
-        for (int i = 0; i < n; i += 2) {                   // left slot only (mic data)
-            double x = (double)samples[i] / 2147483648.0;  // normalize to ~[-1,1)
-            double y = x - xprev + 0.995 * hp;             // DC blocker (high-pass)
-            xprev = x; hp = y;
-            lp += (y - lp) * alpha;                         // low-pass → kick band
-            double e2 = lp * lp;
-            energy += e2;
-            if (e2 > peakE) { peakE = e2; peakIdx = cnt; }
-            cnt++;
+        // Left-slot extraction/normalization — same stride-by-2 workaround as
+        // before (INMP441 L/R tied to GND; mono I2S mode returned all-zero
+        // samples in bring-up, see BEAT_DETECTION.md §3).
+        int cnt = 0;
+        for (int i = 0; i < n; i += 2) {
+            norm[cnt++] = (float)((double)samples[i] / 2147483648.0);
         }
-        energy /= (cnt > 0 ? cnt : 1);
-        baseline += (energy - baseline) * 0.01;            // slow adaptive floor (~0.4 s)
+        ring.write(norm, cnt);
 
-        // Sub-frame onset time: timestamp the loudest sample in the block instead of
-        // the read boundary. This beats the read-block quantization (the resolution
-        // floor) — the kick's energy peak is a stable per-beat reference.
-        uint64_t tEnd    = now_us();
-        uint64_t blockUs = (uint64_t)cnt * 1000000ULL / MIC_SAMPLE_RATE;
-        uint64_t tPeak   = tEnd - blockUs + (uint64_t)peakIdx * 1000000ULL / MIC_SAMPLE_RATE;
+        // Drain full FFT windows as they become available (accumulates across
+        // multiple I2S reads — one read is far smaller than FFT_SIZE). Every
+        // hop also drives the pro-tier Mel->SuperFlux->BTrack chain — this is
+        // the FAST path, at the FFT hop rate (62.5Hz), not the 20Hz poll below.
+        while (ring.available() >= FFT_SIZE) {
+            ring.peek(fftBuf, FFT_SIZE);
+            fft.process(fftBuf);
+            latestEnergies = bandAgg.aggregate16(fft.magnitudes(), fft.bin_count());
+
+            const float *mags = fft.magnitudes();
+            for (size_t i = 0; i < FFT_SIZE / 2; i++) magsSq[i] = mags[i] * mags[i];
+            melFb.process(magsSq, melFrame);
+            auto sf = superflux.process(melFrame);
+            latestBTrackResult = btrack.process(sf.strength);
+
+            ring.advance(HOP_SIZE);
+        }
 
         uint32_t now = now_ms();
+        bool isAudio = (g_mode == MODE_AUDIO);
+        if (!isAudio) {
+            g_mic_armed = false; g_mic_locked = false; consec = 0;
+            if (wasAudio) { onsetDet.reset(); superflux.reset(); btrack.reset(); }
+        }
+        wasAudio = isAudio;
 
-        if (g_mode != MODE_AUDIO) { g_mic_armed = false; g_mic_locked = false; consec = 0; avgInterval = 0.0; }
+        // Outer telemetry step runs at 20 Hz — matches ws_push_task's own
+        // cadence and the basic-tier OnsetDetector's rolling-window tuning
+        // (kept here purely for the chart, see above).
+        if ((now - lastPollMs) < 50) continue;
+        lastPollMs = now;
 
-        double threshFactor = 1.0 + (double)g_micThr / 10.0;
-        // Log mapping: slider 1–50 → ~1e-6..1e-1 normalized energy. Linear was
-        // capped at 5e-4 — the whole range sat in the bottom sliver of the
-        // tuning chart and couldn't reach loud-venue levels at all.
+        // g_micThr (0-30, higher = stricter) inverts onto OnsetDetector's
+        // sensitivity (1-100, higher = more detections) — preserves the
+        // slider's old polarity.
+        int sensitivity = 100 - (g_micThr * 90) / 30;
+        onsetDet.set_sensitivity(sensitivity);
+
+        auto sres = silenceDet.update(latestEnergies.mid + latestEnergies.high, now);
+        if (sres.is_below_gate) {
+            agcBass.suspend(); agcMid.suspend(); agcHigh.suspend(); agcAmp.suspend();
+        }
+
+        float scaledBands[16];
+        for (int i = 0; i < 16; i++) scaledBands[i] = latestEnergies.bands[i] * kRawScale;
+        float smoothBass = agcBass.process(latestEnergies.bass * kRawScale);
+        agcMid.process(latestEnergies.mid * kRawScale);
+        agcHigh.process(latestEnergies.high * kRawScale);
+        agcAmp.process(latestEnergies.amplitude * kRawScale);
+
+        audio_dsp::OnsetDetector::OnsetResult onsetResult{false, 0.0f};
+        if (!sres.is_below_gate) {
+            onsetResult = onsetDet.update(scaledBands, smoothBass, now, -1.0f);
+        }
+
+        // Explicit noise gate — same formula as before (log mapping: slider
+        // 1-50 -> ~1e-6..1e-1), now applied to the rescaled flux value instead
+        // of raw kick-band energy.
+        float flux = onsetDet.last_onset_value() * kTeleFluxScale;
         double gate = (g_micGate > 0) ? pow(10.0, (double)g_micGate / 10.0) * 1e-6 : 0.0;
-        bool onset = (energy > baseline * threshFactor) &&
-                     (energy > gate) &&
-                     (lastOnsetUs == 0 || (tPeak - lastOnsetUs) > 250000ULL);  // refractory → ≤240 BPM
+        if (onsetResult.detected && flux < gate) onsetResult.detected = false;
 
-        if (energy > g_tele_energy) g_tele_energy = energy;  // peak-hold until next push
-        g_tele_baseline  = baseline;
-        g_tele_threshold = baseline * threshFactor;
+        if (flux > g_tele_energy) g_tele_energy = flux;  // peak-hold until next push
+        g_tele_baseline  = onsetDet.mean() * kTeleFluxScale;
+        g_tele_threshold = onsetDet.threshold() * kTeleFluxScale;
         g_tele_gate      = gate;
-        if (onset) { g_tele_onset = 1; g_tele_det = g_tele_det + 1;   // 1=detected; upgraded to 2 if accepted
-                     g_tele_dev = 999.f;                              // overwritten below if judged
-                     g_tele_onsetMs = (uint32_t)(tPeak / 1000ULL); }
+        if (onsetResult.detected) {
+            g_tele_onset = 1; g_tele_det = g_tele_det + 1;  // 1=detected; upgraded to 2 if accepted
+            g_tele_dev = 999.f;                             // overwritten below if judged
+            g_tele_onsetMs = now;
+        }
 
-        if (onset) {
-            if (lastOnsetUs != 0) {
-                double interval = (double)(tPeak - lastOnsetUs) / 1000.0;  // ms, sub-frame precise
-                double bpm = 60000.0 / interval;
-                if (bpm >= 50.0 && bpm <= 220.0) g_mic_bpm = bpm;   // raw hint for display
+        // BTrack (fast path above) is the actual tempo source now — read its
+        // latest per-hop result, gated on its own silence-confidence
+        // threshold (matches the vendor's own gating philosophy rather than
+        // inventing a new one).
+        audio_dsp::BTrack::Result btResult = latestBTrackResult;
+        bool btConfident = btResult.confidence > audio_dsp::BTrack::kSilenceConfidence;
 
-                if (g_mode == MODE_AUDIO && g_mic_armed) {
-                    // Judge acceptance against the STABLE tapped tempo, not the
-                    // wandering output — otherwise a small drift makes the window
-                    // admit one interval tail and reject the other, ratcheting away.
-                    double anchor = (g_mic_tapAnchor > 0.0) ? g_mic_tapAnchor : g_mic_tracked;
-                    if (anchor != lastTapAnchor) { avgInterval = 0.0; lastTapAnchor = anchor; lastAccUs = 0; }
+        if (btConfident && btResult.bpm >= 50.0f && btResult.bpm <= 220.0f) {
+            g_mic_bpm = btResult.bpm;  // raw hint for display
+        }
 
-                    // Measure spacing from the last ACCEPTED beat when we have one —
-                    // a spurious detection between two kicks then can't shatter the
-                    // beat chain, and the octave fold below absorbs 2-4 beat spans.
-                    // Before the first acceptance (or after the chain goes stale)
-                    // fall back to consecutive-onset spacing.
-                    double aInt = interval;
-                    if (lastAccUs != 0) aInt = (double)(tPeak - lastAccUs) / 1000.0;
-                    double aBpm = 60000.0 / aInt;
-                    if (aBpm < 25.0) {          // chain stale (>~4 beats) — restart it
-                        lastAccUs = 0;
-                        aInt = interval;
-                        aBpm = bpm;
+        if (isAudio && g_mic_armed && onsetResult.detected && btConfident && btResult.bpm > 0.0f) {
+            // Judge acceptance against the STABLE tapped tempo, not the
+            // wandering output — otherwise a small drift makes the window
+            // admit one interval tail and reject the other, ratcheting away.
+            double anchor = (g_mic_tapAnchor > 0.0) ? g_mic_tapAnchor : g_mic_tracked;
+
+            // Cheap safety-net octave fold: BTrack's own harmonic-template +
+            // leaky-integrator tempo induction already does the heavy
+            // disambiguation, this just guards the rare case its candidate
+            // lands an octave away from what the operator tapped.
+            double cand = btResult.bpm;
+            while (cand > anchor * 1.4) cand *= 0.5;
+            while (cand < anchor * 0.7) cand *= 2.0;
+            g_tele_dev = (float)(cand - anchor);  // telemetry: the exact judged quantity, BPM units
+
+            if (fabs(cand - anchor) <= (double)g_micWin) {
+                g_tele_acc = g_tele_acc + 1;
+                g_tele_onset = 2;  // this beat passed the accept test
+
+                // Deadband: once trk is within ~0.4 BPM of the target, freeze it
+                // so the displayed tempo stops flickering. Genuine drift beyond
+                // the band still moves it, slew-limited (0.1%/sec).
+                double delta = cand - g_mic_tracked;
+                if (fabs(delta) > 0.4) {
+                    double dt      = (lastApply ? (now - lastApply) : 500) / 1000.0;
+                    double maxStep = (double)g_micSlew * 0.001 * g_mic_tracked * dt;
+                    if (delta >  maxStep) delta =  maxStep;
+                    if (delta < -maxStep) delta = -maxStep;
+                    g_mic_tracked += delta;
+                }
+                // Clamp ±20% of the tapped tempo (octave/subharmonic guard)
+                double lo = anchor * 0.80, hi = anchor * 1.20;
+                if (g_mic_tracked < lo) g_mic_tracked = lo;
+                if (g_mic_tracked > hi) g_mic_tracked = hi;
+                lastApply = now;
+                lastOnset = now;  // last ACCEPTED beat — drives the lock-timeout below
+                if (++consec >= 4) {
+                    if (!g_mic_locked) ws_log("Locked at %.1f BPM", g_mic_tracked);
+                    g_mic_locked = true;
+                }
+
+                if (linkEnabled) {
+                    uint64_t t = now_us();
+                    abl_link_capture_app_session_state(s_link, mic_sess);
+                    abl_link_set_tempo(mic_sess, g_mic_tracked, t);
+                    // Phase-lock (only once locked): gently pull the grid so
+                    // the detected kick lands on the NEAREST beat. Nearest-beat
+                    // correction preserves the tapped bar/downbeat.
+                    if (g_mic_locked) {
+                        double beat    = abl_link_beat_at_time(mic_sess, t, linkQuantum);
+                        double nearest = floor(beat + 0.5);
+                        double fixed   = beat + 0.15 * (nearest - beat);  // low gain
+                        abl_link_force_beat_at_time(mic_sess, fixed, t, linkQuantum);
                     }
-                    // ── Accept test, A/B selectable on the web page (g_micGrid).
-                    // Both branches only decide accept/reject and the clean 1-beat
-                    // interval; everything downstream (EMA, deadband, slew, clamp,
-                    // lock, phase-lock) is shared so the A/B comparison is fair.
-                    bool   accepted = false;
-                    double candBpm  = anchor;   // tempo target fallback before the EMA has data
-                    double cleanInt = 0.0;      // 1-beat interval for the EMA (0 = don't feed)
-                    uint64_t accAnchorUs = tPeak; // next chain reference (grid mode may not fully trust the beat)
-                    if (!g_micGrid) {
-                        // A (production): fold the interval-BPM into the anchor's
-                        // octave, accept within ±win BPM of the anchor. Only
-                        // un-folded (true 1-beat) intervals feed the tempo EMA.
-                        if (aBpm >= 25.0 && aBpm <= 220.0) {
-                            double cand = aBpm;
-                            while (cand > anchor * 1.4) cand *= 0.5;   // fold octaves to anchor
-                            while (cand < anchor * 0.7) cand *= 2.0;
-                            double tol = (double)g_micWin;   // accept window, ± BPM
-                            g_tele_dev = (float)(cand - anchor);  // telemetry: the exact judged quantity
-                            if (fabs(cand - anchor) <= tol) {
-                                accepted = true;
-                                candBpm  = cand;
-                                if (cand == aBpm) cleanInt = aInt;   // un-folded → true 1-beat
-                            }
-                        }
-                    } else {
-                        // B (prototype): phase grid — accept if the onset lands within
-                        // ±w ms of ANY whole number of beats after the last accepted
-                        // beat. Constant time tolerance (onset jitter doesn't grow
-                        // with gap length), no octave folding, and a 3-beat gap is on
-                        // the pulse (two misses) so it is accepted — the fold can't do
-                        // that. Off-pulse hits (e.g. 1.5 beats) are maximally far from
-                        // the grid and rejected. ±win BPM is mapped to ms at 1 beat.
-                        double ref = (g_mic_tracked > 0.0) ? g_mic_tracked : anchor;
-                        double P   = 60000.0 / ref;                 // beat period, ms
-                        double w   = P * (double)g_micWin / ref;    // ±win BPM → ±ms
-                        double k   = floor(aInt / P + 0.5);         // nearest grid multiple
-                        if (k >= 1.0 && aInt <= 2400.0) {           // same freshness limit as the chain
-                            double err = aInt - k * P;              // ms off the grid
-                            g_tele_dev = (float)err;                // telemetry: ms here (BPM in mode A)
-                            if (fabs(err) <= w) {
-                                accepted = true;
-                                cleanInt = aInt / k;                // every accept yields a per-beat estimate
-                                candBpm  = 60000.0 / cleanInt;
-                                // Quality-weighted re-anchor: a beat dead on the grid
-                                // (q→1) pulls the reference hard; one scraping the
-                                // window edge (q→0) barely nudges it. Never 100% —
-                                // one noisy beat must not become the whole reference.
-                                // v1 anchored fully to tPeak and the grid inherited
-                                // every beat's timing jitter; this is the fix.
-                                if (lastAccUs != 0) {
-                                    double q    = 1.0 - fabs(err) / w;      // 1 = centre, 0 = edge
-                                    double keep = (1.0 - 0.8 * q) * err;    // ms of error NOT adopted (gmax = 0.8)
-                                    accAnchorUs = (uint64_t)((int64_t)tPeak - (int64_t)llround(keep * 1000.0));
-                                }
-                            }
-                        }
-                    }
-                    {
-                        if (accepted) {
-                            g_tele_acc = g_tele_acc + 1;
-                            g_tele_onset = 2;   // this beat passed the accept test
-
-                            lastAccUs = accAnchorUs;  // mode A: = tPeak; grid mode: quality-weighted
-                            // Average the clean ~1-beat interval (EMA) → accurate, continuous
-                            // tempo, unbiased (interval domain) and free of the 8 ms grid.
-                            if (cleanInt > 0.0) {
-                                if (avgInterval <= 0.0) avgInterval = cleanInt;
-                                else                    avgInterval += 0.08 * (cleanInt - avgInterval);
-                            }
-                            double target = (avgInterval > 0.0) ? (60000.0 / avgInterval) : candBpm;
-
-                            // Deadband: once trk is within ~0.4 BPM of the target, freeze it
-                            // so the displayed tempo stops flickering. Genuine drift beyond
-                            // the band still moves it, slew-limited (0.1%/sec).
-                            double delta = target - g_mic_tracked;
-                            if (fabs(delta) > 0.4) {
-                                double dt      = (lastApply ? (now - lastApply) : 500) / 1000.0;
-                                double maxStep = (double)g_micSlew * 0.001 * g_mic_tracked * dt;
-                                if (delta >  maxStep) delta =  maxStep;
-                                if (delta < -maxStep) delta = -maxStep;
-                                g_mic_tracked += delta;
-                            }
-                            // Clamp ±20% of the tapped tempo (octave/subharmonic guard)
-                            double lo = anchor * 0.80, hi = anchor * 1.20;
-                            if (g_mic_tracked < lo) g_mic_tracked = lo;
-                            if (g_mic_tracked > hi) g_mic_tracked = hi;
-                            lastApply = now;
-                            lastOnset = now;  // last ACCEPTED beat — drives the lock-timeout below
-                            if (++consec >= 4) g_mic_locked = true;
-
-                            if (linkEnabled) {
-                                uint64_t t = now_us();
-                                abl_link_capture_app_session_state(s_link, mic_sess);
-                                abl_link_set_tempo(mic_sess, g_mic_tracked, t);
-                                // Phase-lock (only once locked): gently pull the grid so
-                                // the detected kick lands on the NEAREST beat. Nearest-beat
-                                // correction preserves the tapped bar/downbeat.
-                                if (g_mic_locked) {
-                                    double beat    = abl_link_beat_at_time(mic_sess, t, linkQuantum);
-                                    double nearest = floor(beat + 0.5);
-                                    double fixed   = beat + 0.15 * (nearest - beat);  // low gain
-                                    abl_link_force_beat_at_time(mic_sess, fixed, t, linkQuantum);
-                                }
-                                abl_link_commit_app_session_state(s_link, mic_sess);
-                            }
-                        }
-                        // No consec reset on a windowed-out value → lock stays sticky
-                    }
+                    abl_link_commit_app_session_state(s_link, mic_sess);
                 }
             }
-            lastOnsetUs = tPeak;
+            // No consec reset on a windowed-out value → lock stays sticky
         }
 
         // Drop the lock if no ACCEPTED beat (lastOnset, set only on acceptance
@@ -2270,14 +2306,17 @@ static void mic_task(void *) {
         uint32_t lockHold = (g_mic_tracked > 60.0)
                           ? (uint32_t)(6.0 * 60000.0 / g_mic_tracked) : 6000;
         if (lockHold < 3500) lockHold = 3500;
-        if (g_mic_locked && (now - lastOnset) > lockHold) { g_mic_locked = false; consec = 0; avgInterval = 0.0; }
+        if (g_mic_locked && (now - lastOnset) > lockHold) {
+            ws_log("Lock lost (was %.1f BPM)", g_mic_tracked);
+            g_mic_locked = false; consec = 0;
+        }
 
         // Tuning telemetry while in Audio mode
-        if (g_mode == MODE_AUDIO && (now - lastDbg) >= 500) {
+        if (isAudio && (now - lastDbg) >= 500) {
             lastDbg = now;
-            printf("mic e=%.0f base=%.0f thrx=%.2f gate=%.0f raw=%.1f trk=%.1f armed=%d lock=%d\n",
-                   energy * 1e6, baseline * 1e6, threshFactor, gate * 1e6,
-                   (double)g_mic_bpm, (double)g_mic_tracked,
+            printf("mic flux=%.3e mean=%.3e thr=%.3e gate=%.3e raw=%.1f trk=%.1f conf=%.2f armed=%d lock=%d\n",
+                   (double)flux, (double)g_tele_baseline, (double)g_tele_threshold, gate,
+                   (double)g_mic_bpm, (double)g_mic_tracked, (double)btResult.confidence,
                    g_mic_armed ? 1 : 0, g_mic_locked ? 1 : 0);
         }
     }
@@ -2382,7 +2421,7 @@ extern "C" void app_main(void) {
     printf("OSC listening on port %d\n", OSC_PORT);
     xTaskCreate(cdj_task, "cdj", 4096, nullptr, 5, nullptr);
     printf("CDJ listener on port %d\n", CDJ_PORT);
-    xTaskCreate(mic_task, "mic", 4096, nullptr, 5, nullptr);
+    xTaskCreate(mic_task, "mic", 8192, nullptr, 5, nullptr);
     printf("Mic beat detector started\n");
     xTaskCreate(ws_push_task, "ws_push", 3072, nullptr, 4, nullptr);
 

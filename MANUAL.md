@@ -69,7 +69,7 @@ How to use it:
 3. **Tap once on the beat** to accept the detected tempo and set the downbeat to that moment — or **tap four times** if you want to set the tempo yourself and let the mic refine it from there.
 4. The beat digit's decimal point **blinks** while the mic is searching for a stable lock, then goes **solid** once locked. From then on the tempo tracks the music automatically; a single tap any time re-aligns the downbeat without changing the tempo.
 
-The detector is tuned for a clear kick drum. Four menu items (`uind`, `SLEu`, `thr`, `gAte`, shown only in Audio mode) fine-tune it — see the technical write-up in `BEAT_DETECTION.md` if you want to understand or adjust them.
+The detector analyzes the full spectrum via an FFT/mel-filterbank pipeline rather than a single frequency band, so it isn't limited to a specific kick sound. Four parameters on the web config page's BPM tuning tab (not on-device menu items) fine-tune it — see the technical write-up in `BEAT_DETECTION.md` if you want to understand or adjust them.
 
 ### CDJ (`Cdj`)
 
@@ -121,7 +121,7 @@ By default tapbox uses DHCP. If you need a fixed address, set `Lan.` to `Stat` o
 
 ### Web Configuration Page
 
-The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via `Addr` in the menu). This applies every time, in every mode, since the page can change any setting on the device. The page is organized into three tabs, each with its own save button. Fields that don't apply to your current settings are greyed out rather than hidden, so the layout stays consistent.
+The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via `Addr` in the menu). This applies every time, in every mode, since the page can change any setting on the device. The page is organized into four tabs — Network, Settings, and BPM tuning each have their own save button; the Log tab is view-only. Fields that don't apply to your current settings are greyed out rather than hidden, so the layout stays consistent.
 
 ![Network tab](docs/tapbox_web_config_network.png)
 
@@ -133,7 +133,11 @@ The config page is available at the device's IP address on port 80, from any bro
 
 ![BPM tuning tab](docs/tapbox_web_config_BPM_tuner.png)
 
-**BPM tuning** — the five microphone beat-detector parameters plus a live chart of the microphone signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever Sync mode isn't set to Audio, since these settings only affect audio detection.
+*(screenshot predates the current tuning parameters and the Log tab — due for a retake)*
+
+**BPM tuning** — four microphone beat-detector parameters plus a live chart of the microphone signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever Sync mode isn't set to Audio, since these settings only affect audio detection.
+
+**Log** — a fourth, view-only tab: a live scrolling log of tap/arm/lock events, timestamped, useful for testing without a serial cable attached (e.g. watching tempo-tracking behavior while changing pitch/speed in DJ software). Only active while the tab is open in a browser — see `BEAT_DETECTION.md` for what's logged.
 
 ---
 
@@ -189,17 +193,20 @@ The active mode is shown by a bar on the display (top = CDJ, middle = Manual, bo
 
 ### Audio Tuning
 
-The five microphone beat-detector parameters are configured on the **web config page** — there's no practical way to dial these in one tap at a time, and they're rarely touched once set:
+The microphone beat-detector runs an FFT/mel-filterbank onset detector feeding a dynamic-programming beat tracker (`BTrack`) — see `BEAT_DETECTION.md` for the full pipeline. Four parameters are configured on the **web config page**'s BPM tuning tab — there's no practical way to dial these in one tap at a time, and they're rarely touched once set:
 
-- **Accept window** (± BPM, 1–10): how far a detected beat may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
-- **Tempo slew**: how fast the detected tempo is allowed to move (rate limit), in units of 0.1 %/sec.
-- **Onset threshold**: how much a kick must stand out to count. Higher rejects more false hits.
-- **Noise gate** (0–50): an absolute loudness floor. A sound has to be at least this loud to count as a beat at all, no matter what else is happening. The scale is logarithmic — low values sit just above room silence, high values reach loud-venue levels — so each step matters more as you go up.
-- **Kick filter** (60–300 Hz): the low-pass cutoff that isolates "kick drum" energy before anything else is measured. Boomy sub-bass kicks sit well under 100 Hz; clicky or acoustic kicks carry meaningful attack energy up to 200–300 Hz. Get this wrong and no amount of threshold or gate tuning fully compensates, since the other four controls only ever see whatever this filter lets through.
+- **Accept window** (± BPM, 1–10): how far `BTrack`'s tempo estimate may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
+- **Tempo slew**: how fast the applied tempo is allowed to move (rate limit), in units of 0.1 %/sec.
+- **Onset threshold**: sensitivity of the tuning-chart's onset detector (see below) — how much a spectral change must stand out to count. Higher rejects more false hits.
+- **Noise gate** (0–50): an absolute floor for the tuning-chart's onset detector. The scale is logarithmic — low values sit just above room silence, high values reach loud-venue levels — so each step matters more as you go up.
 
-Above the chart, a live readout shows the **measured BPM** (raw, from the last detected beat interval), the **Link BPM** (the smoothed tempo actually driving the session), and the tracking state (idle / searching / locked).
+Onset threshold and noise gate tune the **chart's own onset detector** — a simpler, separate signal kept specifically to drive this live display. The actual tempo-tracking algorithm (`BTrack`) does its own onset detection and confidence gating internally, with no exposed tuning knob for it — accept window and tempo slew are what govern how the *real* tracked tempo is allowed to move.
 
-The web page shows a **live chart** of the microphone signal while you adjust these — the blue trace is the incoming energy, the orange dashed line is the onset threshold, the red dashed line is the noise gate, and green dots mark each detected beat. The vertical scale is fixed and logarithmic (never rescales, so a single loud transient can't throw off your reading), which conveniently means the noise gate line moves in a straight line with its slider. Drag the sliders and watch the trace cross the lines in real time, rather than guessing a number and listening afterward. Each slider applies immediately, live — there's no separate save step for these while tuning.
+Above the chart, a live readout shows the **measured BPM** (raw, from `BTrack`, only updates while its confidence is high enough to trust), the **Link BPM** (the smoothed tempo actually driving the session), and the tracking state (idle / searching / locked).
+
+The web page shows a **live chart** of the tuning-detector's signal while you adjust these — the blue trace is the incoming energy, the orange dashed line is the onset threshold, the red dashed line is the noise gate, and green dots mark each detected beat. The vertical scale is fixed and logarithmic (never rescales, so a single loud transient can't throw off your reading), which conveniently means the noise gate line moves in a straight line with its slider. Drag the sliders and watch the trace cross the lines in real time, rather than guessing a number and listening afterward. Each slider applies immediately, live — there's no separate save step for these while tuning.
+
+For a real-time view of tap/lock events without a serial cable — useful when testing tempo tracking against something like a DJ pitch fader — see the **Log** tab described above.
 
 Below the chart, a rolling 10-second count shows **beats detected vs accepted**. Detected-but-not-accepted beats were outside the accept window — a high detect count with a low accept count means the detector hears rhythm that disagrees with the current tempo (wrong tempo anchor, or spurious hits).
 

@@ -13,7 +13,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 
 - **Three sync modes** — **Manual** (tap tempo), **Audio** (microphone auto-detects BPM, you tap the downbeat), and **CDJ** (Pioneer Pro DJ Link). Chosen with the `node` menu item; the active mode is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio)
 - **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session (Manual mode)
-- **Audio beat detection** — an INMP441 I2S microphone listens to the room and tracks the tempo automatically; you tap the downbeat for phase. → [How beat detection works](BEAT_DETECTION.md)
+- **Audio beat detection** — an INMP441 I2S microphone listens to the room and tracks the tempo automatically via an FFT/mel-filterbank onset detector and a dynamic-programming beat tracker (`BTrack`); you tap the downbeat for phase. → [How beat detection works](BEAT_DETECTION.md)
 - **Pioneer CDJ sync** — passively listens for Pro DJ Link beat packets on the same network; bridges CDJ tempo directly into the Ableton Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
@@ -88,10 +88,6 @@ Value flashes at 4 Hz in edit mode.
 | `nud ` | OSC nudge size | 50 ms · 20 ms · 5 ms |
 | `Led ` | Display brightness | 1 – 4 (live preview) |
 | `node` | Sync mode | `Cdj` · `Aud` (audio) · `tAP` (manual) |
-| `uind` | Mic accept window | ± BPM around tapped tempo, 1–10 (Audio mode only) |
-| `SLEu` | Mic tempo slew | rate limit, 0.1 %/sec units (Audio mode only) |
-| `thr ` | Mic onset threshold | sensitivity to kicks (Audio mode only) |
-| `gAte` | Mic noise gate | absolute signal floor (Audio mode only) |
 | `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) · `  AP` (WiFi access point) |
 | `Addr` | Current IP address | read-only; shows last octet; press **select** to scroll full IP across display |
 | `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
@@ -100,7 +96,7 @@ Value flashes at 4 Hz in edit mode.
 | `vEr ` | Firmware version | read-only; shows major.minor.patch |
 | `done` | Exit menu | returns to normal mode |
 
-`node` selects the sync mode. The four mic-tuning items (`uind`, `SLEu`, `thr`, `gAte`) are **only shown when mode is `Aud`** — they tune the audio beat detector (see [BEAT_DETECTION.md](BEAT_DETECTION.md)).  
+`node` selects the sync mode. The mic-tuning parameters that tune the audio beat detector are **web-only** (BPM tuning tab on the config page, not an on-device menu item) — see [BEAT_DETECTION.md](BEAT_DETECTION.md).  
 `IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
 `Addr` is read-only. Navigating to it shows the last octet of the current IP as a quick reference; pressing **select** scrolls the full IP address across the display.  
 Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
@@ -186,12 +182,14 @@ The web config page is at **http://192.168.10.1**. Ableton Link and OSC work on 
 
 https://github.com/user-attachments/assets/4fc4b9d1-01f0-478f-aac5-574820e12f76
 
-The config page at `http://<tapbox-ip>` is accessible from any browser over Ethernet or WiFi. It has two sections:
+The config page at `http://<tapbox-ip>` is accessible from any browser over Ethernet or WiFi. It has four tabs:
 
-| Section | Fields | Button | Effect |
-|---------|--------|--------|--------|
+| Tab | Fields | Button | Effect |
+|-----|--------|--------|--------|
 | Network | WiFi SSID/password, Ethernet mode, static IP/subnet/gateway | Save Network — tapbox will reboot | Saves and reboots |
-| Settings | Time signature, sync mode, brightness, nudge size | Save Settings | Saves and applies live — no reboot |
+| Settings | Time signature, sync mode, brightness | Save Settings | Saves and applies live — no reboot |
+| BPM tuning | Onset threshold, noise gate, accept window, tempo slew, plus a live chart of the microphone signal | Save Tuning | Applies live as you drag; see [BEAT_DETECTION.md](BEAT_DETECTION.md) |
+| Log | Live scrolling log of tap/arm/lock events over the same WebSocket the chart uses — no controls, view-only | — | — |
 
 ## OSC Interface
 
