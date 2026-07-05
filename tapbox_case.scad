@@ -22,19 +22,15 @@ module donut(radius=10, height=2){
     rotate_extrude(angle=360) translate([radius - r,0,0]) circle(d=height);
 }
 
-module rounded_disk(radius=10, height=2){
-    hull() donut(radius, height);
-}
-
 module round_rounded_rect(width, length, height, corner_radius, edge_radius){ 
     w = width * 0.5;
     l = length * 0.5;
     h = height * 0.5;
     hull(){
-        translate([-w+corner_radius, -l+corner_radius,0]) rounded_disk(cr, height);
-        translate([-w+corner_radius, l-corner_radius,0]) rounded_disk(cr, height);
-        translate([w-corner_radius, -l+corner_radius,0]) rounded_disk(cr, height);
-        translate([w-corner_radius, l-corner_radius,0]) rounded_disk(cr, height);
+        translate([-w+corner_radius, -l+corner_radius,0]) donut(corner_radius, edge_radius*2);
+        translate([-w+corner_radius, l-corner_radius,0]) donut(corner_radius, edge_radius*2);
+        translate([w-corner_radius, -l+corner_radius,0]) donut(corner_radius, edge_radius*2);
+        translate([w-corner_radius, l-corner_radius,0]) donut(corner_radius, edge_radius*2);
     }
 }
 
@@ -102,6 +98,9 @@ module case_base(){
         translate([-w+cr, l-cr,-1]) cylinder(d=8.8, h=2);
         translate([w-cr, -l+cr,-1]) cylinder(d=8.8, h=2);
         translate([w-cr, l-cr,-1]) cylinder(d=8.8, h=2);
+        
+        // Microphone hole and slot
+        translate([0, 50.4,thickness+10]) rotate([0,0,90]) inmu441_microphone_holder(cut=true);
     }
     
     //  lock bracket mounting posts for WT32 board
@@ -117,8 +116,11 @@ module case_base(){
     }
    
     //  Battery holder
-    translate([-36,-35,t]) rotate([0,0,90]) 26650_battery_bulkhead();
-    translate([-36,35,t]) rotate([0,0,-90]) 26650_battery_bulkhead();
+    translate([-36,-34.5,t]) rotate([0,0,90]) 26650_battery_bulkhead();
+    translate([-36,34.5,t]) rotate([0,0,-90]) 26650_battery_bulkhead();
+    
+    // microphone holder
+    translate([0, 50.4,thickness+10]) rotate([0,0,90]) inmu441_microphone_holder();
     
     //  Marking on off switch
     translate([52,5,thickness + 11]) rotate([90,0,90]) linear_extrude(1) text("1", size=4);
@@ -179,6 +181,23 @@ module switch(cut = false){
     }
 }
 
+module inmu441_microphone_holder(cut = false){
+    if (cut){
+        //  microphone hole
+        translate([1.6-0.1,8,8]) rotate([0,90,0]) cylinder(d=4, h=10);
+        //  Groove for components to clear
+        translate([1.6-0.1,6,4]) cube([2,4,16]);
+    } else {
+        difference(){
+            cube([2,16,12]);
+            translate([0.6,1,1]) cube([1,14,16]);
+            translate([-2+1,1.5,1]) cube([2,13,16]);
+            //  Groove for components to clear
+            translate([1.6 - 0.1,6,4]) cube([3,4,16]);
+        }
+    }
+}
+
 module push_button(cut=false){
     w = cut? 24.1 : 23.8;
     l = cut? 18.3 : 18;
@@ -225,13 +244,14 @@ module 26650_battery_bulkhead(){
     translate([0,0,bw*0.5]) rotate([0,-90,0])
     difference(){
         union(){
-            translate([-bw*0.5,-bw*0.5,0]) cube([bw*0.5, bw, 5.1]);
-            cylinder(d=bw, h=5.1);
+            translate([-bw*0.5,-bw*0.5,0]) cube([bw*0.5, bw, 5.6]);
+            cylinder(d=bw, h=5.6);
             translate([-bw*0.5,-bw*0.5,-4]) cube([bw*0.5, bw, 8]);
         }
         translate([0,0,-4-1]) cylinder(d=bw+0.3, h=4+ 1);
-        translate([4.9, -4.9, -1]) cube([bw,9.8,2.4]);
-        translate([-4.9, -4.9, 1 + 0.4]) cube([bw,9.8,0.4]);
+        translate([4.9, -5, -1]) cube([bw,10,2.4]);
+        translate([4.9, -1.5, -1]) cube([bw,3,8.4]);
+        translate([-4.9, -5, 1 + 0.4]) cube([bw,10,0.4]);
         translate([-3.9, -4.4, -1]) cube([bw,8.8,2.4]);
     }
 }
@@ -249,5 +269,8 @@ module 26650_battery_bulkhead(){
 //translate([0,0,5.2]) wt32_bracket();
 //translate([29, 2.15,31]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module();
 //translate([29,-38,34.5]) menu_switch(cut=false);
-case_base();
+//case_base();
 //translate([0,0,height-4.5]) lid();
+
+round_rounded_rect(width=40, length=10, height=1, corner_radius=1, edge_radius=1);
+//round_rounded_rect(width=45, length=15, height=1, corner_radius=1, edge_radius=1);

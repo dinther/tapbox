@@ -1,6 +1,6 @@
 # tapbox
 
-tapbox is a beat engine — you tap the downbeat and it feeds rock-solid tempo to everything on Ableton Link.
+TapBox turns any music source into a reliable Ableton Link tempo and downbeat master—whether the beat comes from a CDJ, an audio signal, or your own tap.
 
 The device is based on a ESP32 controller that joins an [Ableton Link](https://www.ableton.com/en/link/) session over Ethernet or WiFi. Built on the [WT32-ETH01](http://www.wireless-tag.com/portfolio/wt32-eth01/) module with a MAX7219 8-digit 7-segment display.
 
@@ -179,8 +179,6 @@ The web config page is at **http://192.168.10.1**. Ableton Link and OSC work on 
 > Do not set the laptop gateway to an address outside the tapbox subnet — it will cause routing errors on that interface. Leaving the gateway blank or pointing it at the tapbox IP is safe.
 
 ## Web Configuration
-
-https://github.com/user-attachments/assets/4fc4b9d1-01f0-478f-aac5-574820e12f76
 
 The config page at `http://<tapbox-ip>` is accessible from any browser over Ethernet or WiFi. It has four tabs:
 
