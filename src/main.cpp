@@ -229,6 +229,7 @@ static void nvs_save_ota_pending(bool);  // forward declaration
 static void rtc_save_settings();         // forward declaration
 static void wifi_init();                 // forward declaration
 static void wifi_stop();                 // forward declaration
+static void do_tap();                    // forward declaration
 
 static void eth_lost_cb(void *, esp_event_base_t, int32_t, void *) {
     g_eth_lost = true;
@@ -842,8 +843,11 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         ":root{color-scheme:dark}"
         "body{font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
         "background:#0e0e0e;color:#e0e0e0;max-width:400px;margin:20px auto;padding:0 15px}"
-        "h2{margin-bottom:4px;color:#fff;font-size:2rem;font-weight:800;letter-spacing:-0.02em}"
+        "#hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}"
+        "h2{margin:0;color:#fff;font-size:2rem;font-weight:800;letter-spacing:-0.02em}"
         "h2 span,label span{color:#B7F7A5}"
+        "#tapbtn{width:60px;height:60px;flex-shrink:0;margin-top:0;padding:0;"
+        "border-radius:50%;background:#B7F7A5;color:#0e0e0e;font-size:14px}"
         "h3{margin:20px 0 6px;color:#fff;font-size:1.05rem;"
         "border-bottom:1px solid #222;padding-bottom:5px}"
         "label{display:block;margin:8px 0 2px;font-size:13px;color:#999}"
@@ -877,7 +881,10 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         ".mnum{font-size:13px;color:#ccc;margin:2px 0;font-variant-numeric:tabular-nums}"
         ".mnum b{color:#B7F7A5;font-weight:700;display:inline-block;min-width:2.4ch;text-align:right}"
         "</style></head><body>"
+        "<div id=hdr>"
         "<h2>tap<span>box</span></h2>"
+        "<button type=button id=tapbtn onclick=\"doTap()\">Tap</button>"
+        "</div>"
         "<div id=tabs>"
         "<button type=button class=\"tb on\" onclick=\"tab(0)\">Network</button>"
         "<button type=button class=tb onclick=\"tab(1)\">Settings</button>"
@@ -1020,6 +1027,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
 
     httpd_resp_sendstr_chunk(req,
         "<script>"
+        "function doTap(){fetch('/tap',{method:'POST'});}"
         "function tab(i){for(var j=0;j<4;j++){"
           "document.getElementById('t'+j).className=(j==i)?'tab on':'tab';"
           "document.getElementsByClassName('tb')[j].className=(j==i)?'tb on':'tb';"
@@ -1230,6 +1238,16 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Same tap the physical button drives — lets the web page act as a remote
+// tap button. No redirect (unlike /save, /apply): the page doesn't need to
+// re-render anything, so the JS just fires-and-forgets a fetch.
+static esp_err_t http_post_tap(httpd_req_t *req) {
+    if (!http_check_auth(req)) return ESP_OK;
+    do_tap();
+    httpd_resp_send(req, nullptr, 0);
+    return ESP_OK;
+}
+
 // Live audio-tuning chart. IMPORTANT (ESP-IDF 6.x): the framework completes
 // the WS handshake itself and does NOT call the uri handler for the handshake
 // GET (httpd_uri.c: "do not call the uri->handler"), so there is no place to
@@ -1334,16 +1352,18 @@ static void ws_push_task(void *) {
 static void http_server_start() {
     if (s_httpd) return;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 4;
+    cfg.max_uri_handlers = 5;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) { s_httpd = nullptr; return; }
     httpd_uri_t get_h   = { .uri = "/",      .method = HTTP_GET,  .handler = http_get_root,   .user_ctx = nullptr };
     httpd_uri_t save_h  = { .uri = "/save",  .method = HTTP_POST, .handler = http_post_save,  .user_ctx = nullptr };
     httpd_uri_t apply_h = { .uri = "/apply", .method = HTTP_POST, .handler = http_post_apply, .user_ctx = nullptr };
+    httpd_uri_t tap_h   = { .uri = "/tap",   .method = HTTP_POST, .handler = http_post_tap,   .user_ctx = nullptr };
     httpd_uri_t ws_h    = { .uri = "/ws",    .method = HTTP_GET,  .handler = ws_handler,      .user_ctx = nullptr,
                             .is_websocket = true };
     httpd_register_uri_handler(s_httpd, &get_h);
     httpd_register_uri_handler(s_httpd, &save_h);
     httpd_register_uri_handler(s_httpd, &apply_h);
+    httpd_register_uri_handler(s_httpd, &tap_h);
     httpd_register_uri_handler(s_httpd, &ws_h);
     printf("HTTP config server started\n");
 }
@@ -1831,10 +1851,7 @@ static void osc_handle(const uint8_t *buf, int len) {
     int         args_len   = len - addr_bytes - tags_bytes;
 
     if (strcmp(addr, "/tap") == 0) {
-        TapResult r = tapTempo.tap();
-        if (r.wentLive)                       { go_live(tapTempo.bpm(), tapTempo.sessionStartMs()); printf("OSC live: %.1f BPM\n", tapTempo.bpm()); }
-        else if (r.bpmChanged && linkEnabled) { set_link_tempo(tapTempo.bpm()); printf("OSC tap: %.1f BPM\n", tapTempo.bpm()); }
-        else if (r.newSession)                { printf("OSC tap: new session\n"); }
+        do_tap();  // same tap the physical button and the web Tap button drive
     } else if (strcmp(addr, "/bpm") == 0 && args_len >= 4) {
         float bpm = (tags[1] == 'f') ? osc_float(args) : (float)(int32_t)osc_u32(args);
         tapTempo.setBpm(bpm);
