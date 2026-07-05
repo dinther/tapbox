@@ -64,7 +64,7 @@ A small microphone listens to the room and works out the tempo for you, while **
 
 How to use it:
 
-1. Switch <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> to `Aud`. The bottom bar lights up. Nothing happens to the tempo yet — the mic is just listening.
+1. Switch <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> to <img src="docs/menu_value_aud.png" alt="Aud" height="26" valign="middle">. The bottom bar lights up. Nothing happens to the tempo yet — the mic is just listening.
 2. Play the music near the microphone.
 3. **Tap once on the beat** to accept the detected tempo and set the downbeat to that moment — or **tap four times** if you want to set the tempo yourself and let the mic refine it from there.
 4. The beat digit's decimal point **blinks** while the mic is searching for a stable lock, then goes **solid** once locked. From then on the tempo tracks the music automatically; a single tap any time re-aligns the downbeat without changing the tempo.
@@ -179,13 +179,13 @@ The display gives you a live preview as you change the value. In a dark venue, l
 
 **What it does:** selects where tapbox gets its tempo. Three values:
 
-- **`Cdj`** — Pioneer Pro DJ Link (see below)
-- **`Aud`** — audio beat detection from the microphone (you tap the downbeat)
-- **`tAP`** — manual tap tempo
+- <img src="docs/menu_value_cdj.png" alt="Cdj" height="26" valign="middle"> — Pioneer Pro DJ Link (see below)
+- <img src="docs/menu_value_aud.png" alt="Aud" height="26" valign="middle"> — audio beat detection from the microphone (you tap the downbeat)
+- <img src="docs/menu_value_tap.png" alt="tAP" height="26" valign="middle"> — manual tap tempo
 
 The active source is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio). See the **Sync Sources** section earlier in this manual for how each one works in practice.
 
-**About CDJ source:** when set to `Cdj`, tapbox listens on the same Ethernet switch as your CDJ players and reads their beat timing automatically. The active CDJ's BPM is fed directly into the Ableton Link session — all your Link peers follow the CDJ without any tapping. A `C` indicator confirms the lock. tapbox follows the lowest player number (1 → 2 → 3 → 4); if that player stops for more than two seconds it drops to the next. While a CDJ is actively driving the tempo, the tap button is ignored — the CDJ is in control. If no CDJ is present, CDJ source behaves like manual tap tempo.
+**About CDJ source:** when set to <img src="docs/menu_value_cdj.png" alt="Cdj" height="26" valign="middle">, tapbox listens on the same Ethernet switch as your CDJ players and reads their beat timing automatically. The active CDJ's BPM is fed directly into the Ableton Link session — all your Link peers follow the CDJ without any tapping. A `C` indicator confirms the lock. tapbox follows the lowest player number (1 → 2 → 3 → 4); if that player stops for more than two seconds it drops to the next. While a CDJ is actively driving the tempo, the tap button is ignored — the CDJ is in control. If no CDJ is present, CDJ source behaves like manual tap tempo.
 
 > CDJ sync requires Ethernet, on the same wired switch as the players. Nothing is installed on the CDJs — tapbox listens passively.
 

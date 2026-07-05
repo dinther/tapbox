@@ -84,7 +84,7 @@ Value flashes at 4 Hz in edit mode.
 |-------|---------|--------|
 | <img src="docs/menu_glyph_beat.png" alt="Beat" height="26" valign="middle"> | Time signature | 2, 3, 4, 5, 6, 7 |
 | <img src="docs/menu_glyph_led.png" alt="Led" height="26" valign="middle"> | Display brightness | 1 – 4 (live preview) |
-| <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> | Sync source | `Cdj` · `Aud` (audio) · `tAP` (manual) |
+| <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> | Sync source | <img src="docs/menu_value_cdj.png" alt="Cdj" height="26" valign="middle"> · <img src="docs/menu_value_aud.png" alt="Aud" height="26" valign="middle"> (audio) · <img src="docs/menu_value_tap.png" alt="tAP" height="26" valign="middle"> (manual) |
 | <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> | Network mode | <img src="docs/menu_value_auto.png" alt="Auto" height="26" valign="middle"> (DHCP) · <img src="docs/menu_value_stat.png" alt="Stat" height="26" valign="middle"> (static) · <img src="docs/menu_value_ap.png" alt="  AP" height="26" valign="middle"> (WiFi access point) |
 | <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> | Current IP address | read-only; shows last octet; press **select** to scroll full IP across display |
 | <img src="docs/menu_glyph_ver.png" alt="vEr" height="26" valign="middle"> | Firmware version | read-only; shows major.minor.patch |
