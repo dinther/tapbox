@@ -4,10 +4,7 @@ TapBox turns any music source into a steady Ableton Link tempo and downbeat mast
 
 The device is based on a ESP32 controller that joins an [Ableton Link](https://www.ableton.com/en/link/) session over Ethernet or WiFi. Built on the [WT32-ETH01](http://www.wireless-tag.com/portfolio/wt32-eth01/) module with a MAX7219 8-digit 7-segment display.
 
-<img width="50%" alt="image" src="https://github.com/user-attachments/assets/7fcc0947-bca3-4eb2-b496-423312c8f760" />
-
-
-
+<img src="docs/AI Case Render.png" alt="Src" height="320" valign="middle">
 
 ## Features
 
@@ -177,7 +174,9 @@ The web config page is at **http://192.168.10.1**. Ableton Link and OSC work on 
 
 ## Web Configuration
 
-The config page at `http://<tapbox-ip>` is accessible from any browser over Ethernet or WiFi. It has four tabs:
+<img src="docs/tapbox_web_config_network.png" alt="Src" width="300" valign="middle"> <img src="docs/tapbox_web_config_settings.png" alt="Src" width="300" valign="middle"> <img src="docs/tapbox_web_config_BPM_tuner.png" alt="Src" width="300" valign="middle">
+
+The config page at `http://<tapbox-ip>` is accessible from any browser over Ethernet or WiFi. A **Tap** button above the tabs works from any of them — same tap the physical button drives. It has four tabs:
 
 | Tab | Fields | Button | Effect |
 |-----|--------|--------|--------|
@@ -190,7 +189,7 @@ The config page at `http://<tapbox-ip>` is accessible from any browser over Ethe
 
 Send UDP packets to the device on **port 8000**.
 
-| Address | Argument | Action |
+| Address | Argument | Action |  
 |---------|----------|--------|
 | `/tap` | — | Same as the tap button |
 | `/bpm` | `float` or `int` | Set BPM directly |

@@ -121,7 +121,7 @@ By default tapbox uses DHCP. If you need a fixed address, set <img src="docs/men
 
 ### Web Configuration Page
 
-The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> in the menu). This applies every time, in every mode, since the page can change any setting on the device. The page is organized into four tabs — Network, Settings, and BPM tuning each have their own save button; the Log tab is view-only. Fields that don't apply to your current settings are greyed out rather than hidden, so the layout stays consistent.
+The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> in the menu). This applies every time, in every mode, since the page can change any setting on the device. A **Tap** button sits above the tabs and works from any of them — it's the same tap the physical button drives, useful for tapping tempo from a phone or laptop without reaching the device. The page below it is organized into four tabs — Network, Settings, and BPM tuning each have their own save button; the Log tab is view-only. Fields that don't apply to your current settings are greyed out rather than hidden, so the layout stays consistent.
 
 ![Network tab](docs/tapbox_web_config_network.png)
 

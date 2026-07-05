@@ -3,3 +3,5 @@
 .vscode/
 managed_components/
 sdkconfig.wt32-eth01
+tools/selfsim_env/
+__pycache__/
