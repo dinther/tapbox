@@ -117,7 +117,7 @@ tapbox switches interfaces automatically without a reboot:
 
 If WiFi credentials fail to connect, tapbox falls back to AP mode immediately so you can reconfigure without rebooting.
 
-By default tapbox uses DHCP. If you need a fixed address, set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to `Stat` on the device and enter the IP/subnet/gateway on the web config page (see below) — this applies to whichever interface, Ethernet or WiFi, is actually active.
+By default tapbox uses DHCP. If you need a fixed address, set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to <img src="docs/menu_value_stat.png" alt="Stat" height="26" valign="middle"> on the device and enter the IP/subnet/gateway on the web config page (see below) — this applies to whichever interface, Ethernet or WiFi, is actually active.
 
 ### Web Configuration Page
 

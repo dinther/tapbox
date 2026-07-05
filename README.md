@@ -16,7 +16,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
 - **Ethernet or WiFi** — Connects to your network as a client; browser config page for credentials; auto-failover to WiFi if no Ethernet present. Can also run as a **WiFi access point** or with a **direct Ethernet cable** to a laptop — no router needed.
 - **Static or DHCP** — configure IP address, subnet, and gateway via the web config page
-- **IP ticker on boot** — non-blocking scroll of connection type, IP address, and security PIN at startup (`Eth`, `SSID`, or `AP`); the PIN doubles as the WiFi AP password and the web config page login; device is fully operational during the scroll
+- **IP ticker on boot** — non-blocking scroll of connection type, IP address, and security PIN at startup (<img src="docs/splash_eth.png" alt="Eth" height="22" valign="middle">, <img src="docs/splash_sta.png" alt="StA" height="22" valign="middle">, or <img src="docs/splash_ap.png" alt="AP" height="22" valign="middle">); the PIN doubles as the WiFi AP password and the web config page login; device is fully operational during the scroll
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
 - **Menu system** — on-device configuration with NVS persistence across power cycles
 - **OTA updates** — open the menu, hold both buttons 3 s, release and confirm with select; device reboots and flashes latest firmware automatically on next network connection
@@ -85,7 +85,7 @@ Value flashes at 4 Hz in edit mode.
 | <img src="docs/menu_glyph_beat.png" alt="Beat" height="26" valign="middle"> | Time signature | 2, 3, 4, 5, 6, 7 |
 | <img src="docs/menu_glyph_led.png" alt="Led" height="26" valign="middle"> | Display brightness | 1 – 4 (live preview) |
 | <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> | Sync source | `Cdj` · `Aud` (audio) · `tAP` (manual) |
-| <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> | Network mode | `Auto` (DHCP) · `Stat` (static) · `  AP` (WiFi access point) |
+| <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> | Network mode | <img src="docs/menu_value_auto.png" alt="Auto" height="26" valign="middle"> (DHCP) · <img src="docs/menu_value_stat.png" alt="Stat" height="26" valign="middle"> (static) · <img src="docs/menu_value_ap.png" alt="  AP" height="26" valign="middle"> (WiFi access point) |
 | <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> | Current IP address | read-only; shows last octet; press **select** to scroll full IP across display |
 | <img src="docs/menu_glyph_ver.png" alt="vEr" height="26" valign="middle"> | Firmware version | read-only; shows major.minor.patch |
 | <img src="docs/menu_glyph_done.png" alt="done" height="26" valign="middle"> | Exit menu | returns to normal mode |
@@ -133,7 +133,7 @@ tapbox can sync with a laptop running Ableton Live (or any Link-enabled app) wit
 
 The simplest option — tapbox creates its own open WiFi network and everything runs on it.
 
-1. In the menu, navigate to <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> and set it to `  AP`. Confirm with select — tapbox reboots.
+1. In the menu, navigate to <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> and set it to <img src="docs/menu_value_ap.png" alt="  AP" height="26" valign="middle">. Confirm with select — tapbox reboots.
 2. On your laptop, connect to the **tapbox** WiFi network (open, no password).
 3. Ableton Link is active immediately. Tap to set tempo and phase as usual.
 4. The web config page is at **http://192.168.4.1** for display and network settings.
@@ -149,7 +149,7 @@ Modern hardware (including the WT32-ETH01 and USB-to-Ethernet adapters) supports
 
 **tapbox — set a static IP:**
 
-1. In the menu, set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to `Stat`.
+1. In the menu, set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to <img src="docs/menu_value_stat.png" alt="Stat" height="26" valign="middle">.
 2. On the web config page's Network tab, set the static IP, subnet, and gateway. Use a private range that is not in use on any other interface — for example:
 
    | Setting | Example |

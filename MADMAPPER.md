@@ -45,7 +45,7 @@ Open **Preferences → Project → OSC** and add an entry under **OSC Outputs** 
 
 The markers in the image call out the two fields that identify tapbox: its **Name** (1) and its **IP** address (2). Leave the **OSC Input** settings at the top of the dialog at their defaults — they are not needed to send commands to tapbox.
 
-> Find tapbox's IP address on its display at boot — it scrolls the connection type and address (for example `Eth 192.168.1.117`). If the address changes between sessions, give tapbox a static IP (set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to `Stat` on the device, then enter the address on the web config page's Network tab — see the manual) so this entry never needs updating.
+> Find tapbox's IP address on its display at boot — it scrolls the connection type and address (for example <img src="docs/splash_eth.png" alt="Eth" height="22" valign="middle"> `192.168.1.117`). If the address changes between sessions, give tapbox a static IP (set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to <img src="docs/menu_value_stat.png" alt="Stat" height="26" valign="middle"> on the device, then enter the address on the web config page's Network tab — see the manual) so this entry never needs updating.
 
 ### 2. Add an OSC Out module per command
 
