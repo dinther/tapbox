@@ -1,13 +1,19 @@
 use <boards.scad>
+use <pathbuilder.scad>
 
-$fn=32;
+$fn=64;
 
 width = 105;
 length = 110;
 height = 40;
-cr = 10;
-er = 1.5;
+cr = 5;
+ser = 0.75;
+ber = 1.0;
+chamfer = 6;
 thickness = 3;
+bolt_offset = 11;
+lid_height = 6;
+
 
 
 module tube(outer_radius=10, inner_radius=8, height=20){
@@ -22,10 +28,9 @@ module donut(radius=10, height=2){
     rotate_extrude(angle=360) translate([radius - r,0,0]) circle(d=height);
 }
 
-module round_rounded_rect(width, length, height, corner_radius, edge_radius){ 
+module round_rounded_rect(width, length, corner_radius, edge_radius){ 
     w = width * 0.5;
     l = length * 0.5;
-    h = height * 0.5;
     hull(){
         translate([-w+corner_radius, -l+corner_radius,0]) donut(corner_radius, edge_radius*2);
         translate([-w+corner_radius, l-corner_radius,0]) donut(corner_radius, edge_radius*2);
@@ -34,11 +39,36 @@ module round_rounded_rect(width, length, height, corner_radius, edge_radius){
     }
 }
 
-module round_rounded_cube(width, length, height, corner_radius, edge_radius){
+module round_chamfered_rect(width, length, chamfer, corner_radius, edge_radius){
+    w = width * 0.5;
+    l = length * 0.5;
     hull(){
-        translate([0,0,er]) round_rounded_rect(width, length, er*2, cr, er);
-        translate([0,0,height - er]) round_rounded_rect(width, length, er*2, cr, er);
+        translate([-w+corner_radius, -l+corner_radius + chamfer,0]) donut(corner_radius, edge_radius*2);
+        translate([-w+corner_radius + chamfer, -l+corner_radius,0]) donut(corner_radius, edge_radius*2);
+        
+        translate([-w+corner_radius + chamfer, l-corner_radius,0]) donut(corner_radius, edge_radius*2);
+        translate([-w+corner_radius, l-corner_radius - chamfer,0]) donut(corner_radius, edge_radius*2);
+        
+        translate([w-corner_radius - chamfer, -l+corner_radius,0]) donut(corner_radius, edge_radius*2);
+        translate([w-corner_radius, -l+corner_radius + chamfer,0]) donut(corner_radius, edge_radius*2);
+        
+        translate([w-corner_radius - chamfer, l-corner_radius,0]) donut(corner_radius, edge_radius*2);
+        translate([w-corner_radius, l-corner_radius - chamfer,0]) donut(corner_radius, edge_radius*2); 
     }
+}
+
+module round_rounded_cube(width, length, height, corner_radius, bottom_edge_radius, top_edge_radius){
+    hull(){
+        translate([0,0,bottom_edge_radius]) round_rounded_rect(width, length, corner_radius, bottom_edge_radius);
+        translate([0,0,height - top_edge_radius]) round_rounded_rect(width, length, corner_radius, top_edge_radius);
+    }
+}
+
+module round_chamfered_cube(width, length, height, chamfer, corner_radius, bottom_edge_radius, top_edge_radius){
+    hull(){
+        translate([0,0,bottom_edge_radius]) round_chamfered_rect(width, length, chamfer, corner_radius, bottom_edge_radius);
+        translate([0,0,height - top_edge_radius]) round_chamfered_rect(width, length, chamfer, corner_radius, top_edge_radius);
+    }    
 }
 
 module case_base(){
@@ -47,11 +77,11 @@ module case_base(){
     l = length * 0.5;
     difference(){
         union(){
-            round_rounded_cube(width, length, 5, cr, er);
-            translate([0,0,4.5]) round_rounded_cube(width, length, 31.5, cr, er);
+            round_chamfered_cube(width, length, 4, chamfer, cr, ber, ser);
+            translate([0,0,4]) round_chamfered_cube(width, length, height-4-lid_height, chamfer, cr, ser, ser);
         }
         difference(){
-            translate([0,0,t]) round_rounded_cube(width-t-t, length-t-t, 50, cr-t, er);
+            translate([0,0,t]) round_chamfered_cube(width-t-t, length-t-t, 50, chamfer, cr-t, ser, ser);
             // remove parts so it gets left behind
             
             //  corner posts
@@ -64,15 +94,15 @@ module case_base(){
             translate([w-t-1.3,14,0]) cube([2,25.2, 23]);
             
             //  posts for display board
-            translate([21.5,56.5,0]) rotate([30,0,0]) cube([16, 10, 40]);
-            translate([21.5,-66,14]) rotate([-45,0,0]) cube([16, 14, 40]);
+            translate([21.5,56.5,0]) rotate([33,0,0]) cube([16, 10, 40]);
+            translate([21.5,-66,14]) rotate([-47,0,0]) cube([16, 14, 40]);
         }
         
         //  Bolt holes
-        translate([-w+cr, -l+cr,t]) cylinder(d=4.6, h=height);
-        translate([-w+cr, l-cr,t]) cylinder(d=4.6, h=height);
-        translate([w-cr, -l+cr,t]) cylinder(d=4.6, h=height);
-        translate([w-cr, l-cr,t]) cylinder(d=4.6, h=height);
+        translate([-w+bolt_offset, -l+bolt_offset,t]) cylinder(d=4.6, h=height);
+        translate([-w+bolt_offset, l-bolt_offset,t]) cylinder(d=4.6, h=height);
+        translate([w-bolt_offset, -l+bolt_offset,t]) cylinder(d=4.6, h=height);
+        translate([w-bolt_offset, l-bolt_offset,t]) cylinder(d=4.6, h=height);
         
         //  RJ 45 hole
         translate([-7.2,14,thickness+2]) wt32_eth01(cut=true);
@@ -85,7 +115,7 @@ module case_base(){
         translate([46.1,0,thickness + 8]) switch(cut=true);
         
         //  Flat area for display board
-        translate([29.0,4.15,41]) cube([17, 83, 20], center=true);
+        translate([29.0,4.15,38.8]) cube([17, 83, 20], center=true);
         
         //  Flat area for menu button
         translate([29.0,-40,44.5]) cube([17, 14, 20], center=true);
@@ -94,13 +124,20 @@ module case_base(){
         translate([29, 2.15,31]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module_holes();
         
         //  Foot pad recesses
-        translate([-w+cr, -l+cr,-1]) cylinder(d=8.8, h=2);
-        translate([-w+cr, l-cr,-1]) cylinder(d=8.8, h=2);
-        translate([w-cr, -l+cr,-1]) cylinder(d=8.8, h=2);
-        translate([w-cr, l-cr,-1]) cylinder(d=8.8, h=2);
+        translate([-w+bolt_offset, -l+bolt_offset,-1]) cylinder(d=8.8, h=2);
+        translate([-w+bolt_offset, l-bolt_offset,-1]) cylinder(d=8.8, h=2);
+        translate([w-bolt_offset, -l+bolt_offset,-1]) cylinder(d=8.8, h=2);
+        translate([w-bolt_offset, l-bolt_offset,-1]) cylinder(d=8.8, h=2);
         
         // Microphone hole and slot
         translate([0, 50.4,thickness+10]) rotate([0,0,90]) inmu441_microphone_holder(cut=true);
+        
+        //  Branding cutout
+        translate([-51.4,0,20]) rotate([90,0,-90]) hull(){
+            round_rounded_rect(width=40, length=20, corner_radius=2.5, edge_radius=0.5);
+            translate([0,0,1]) round_rounded_rect(width=42, length=21, corner_radius=2.5, edge_radius=0.5);
+        }
+        translate([-50.5,0,20]) rotate([0,0,-90]) cube([44, 1, 42], center=true);
     }
     
     //  lock bracket mounting posts for WT32 board
@@ -125,6 +162,9 @@ module case_base(){
     //  Marking on off switch
     translate([52,5,thickness + 11]) rotate([90,0,90]) linear_extrude(1) text("1", size=4);
     translate([52,-8,thickness + 11]) rotate([90,0,90]) linear_extrude(1) text("0", size=4);
+    
+     //  Branding
+     //translate([-50,0,20]) rotate([90,0,-90]) linear_extrude(0.7) text("tapbox", size=8, halign="center", valign="center",spacing=1, direction="ltr", language="en", script="latin");
 }
 
 module lid(){
@@ -132,18 +172,31 @@ module lid(){
     w = width * 0.5;
     l = length * 0.5;
     difference(){
-        round_rounded_cube(width, length, 5, cr, er);
+        union(){
+            hull(){
+                round_chamfered_cube(width, length, lid_height*0.5, chamfer, cr, ser, ber);
+                translate([0,0,lid_height*0.5]) round_chamfered_cube(width-4, length-4, lid_height*0.5, chamfer, cr, ber, ber);
+                
+            }
+            
+            //  battery locks
+            translate([-36,20,-2]) cube([20,5,15], center=true);
+            translate([-36,-20,-2]) cube([20,5,15], center=true);
+        }
+        //  Battery cutouts
+        translate([-36,0,-height+thickness+lid_height]) battery();
+        
         //  Bolt holes
-        translate([-w+cr, -l+cr,-1]) cylinder(d=5.1, h=height+2);
-        translate([-w+cr, l-cr,-1]) cylinder(d=5.1, h=height+2);
-        translate([w-cr, -l+cr,-1]) cylinder(d=5.1, h=height+2);
-        translate([w-cr, l-cr,-1]) cylinder(d=5.1, h=height+2);
+        translate([-w+bolt_offset, -l+bolt_offset,-1]) cylinder(d=5.1, h=height+2);
+        translate([-w+bolt_offset, l-bolt_offset,-1]) cylinder(d=5.1, h=height+2);
+        translate([w-bolt_offset, -l+bolt_offset,-1]) cylinder(d=5.1, h=height+2);
+        translate([w-bolt_offset, l-bolt_offset,-1]) cylinder(d=5.1, h=height+2);
         
         //  Bolt recess
-        translate([-w+cr, -l+cr,1.61]) cylinder(d=9.5, h=3.4);
-        translate([-w+cr, l-cr,1.61]) cylinder(d=9.5, h=3.4);
-        translate([w-cr, -l+cr,1.61]) cylinder(d=9.5, h=3.4);
-        translate([w-cr, l-cr,1.61]) cylinder(d=9.5, h=3.4);
+        translate([-w+bolt_offset, -l+bolt_offset,2.61]) cylinder(d=9.0, h=3.4);
+        translate([-w+bolt_offset, l-bolt_offset,2.61]) cylinder(d=9.0, h=3.4);
+        translate([w-bolt_offset, -l+bolt_offset,2.61]) cylinder(d=9.0, h=3.4);
+        translate([w-bolt_offset, l-bolt_offset,2.61]) cylinder(d=9.0, h=3.4);
 
         //  display slot
         translate([29, 2.15,-2]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module(cut=true);
@@ -152,19 +205,16 @@ module lid(){
         translate([-10,0,-27]) push_button(cut=true);
         
         //  menu button cutout
-        translate([29,-38,-0.8]) menu_switch(cut=true);
-        
-        //  Branding
-        translate([-43,0,5.0-0.6]) rotate([0,0,-90]) linear_extrude(2) text("TapBox", size=8, halign="center", valign="center",spacing=1, direction="ltr", language="en", script="latin");
+        translate([29,-38,-0.8]) menu_switch(cut=true); 
+     
+        //  Display cover cutout
+        translate([29,2.2,6-2]) rotate([0,0,90]) round_rounded_cube(width=67, length=21, height=5, corner_radius=2.5, bottom_edge_radius=0.1, top_edge_radius=0.1);  
     } 
-    //  Lid bracing
-    //translate([10,0,-2.5]) cube([4, width-t-t-0.5, 5], center=true);
-    //translate([-29,0,-2.5]) cube([4, width-t-t-0.5, 5], center=true);
 }
 
 module switch(cut = false){
     t = cut? 6: 0.3;
-    d = cut? 3: 2.5;
+    d = cut? 2.8 : 2.5;
     cube([6.9, 15.5, 7.3], center=true);
     
     translate([3.45, 0, 0]) difference(){
@@ -259,18 +309,13 @@ module 26650_battery_bulkhead(){
 
 
 //translate([46.1,0,thickness + 8]) switch(cut=false);
-//battery_bracket();
 //translate([-10,0,thickness+ 4.5]) push_button(cut=false);
-//  //translate([-23,-48,thickness+4]) CN6009();
 //translate([-36,0,thickness]) battery();
-//  //translate([20.9,-35,thickness+4]) hw_107();
 //translate([49.3,-39,thickness+4]) rotate([0,0,90]) TP4056();
 //translate([-7.2,14,thickness+2]) wt32_eth01();
 //translate([0,0,5.2]) wt32_bracket();
-//translate([29, 2.15,31]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module();
-//translate([29,-38,34.5]) menu_switch(cut=false);
-//case_base();
-//translate([0,0,height-4.5]) lid();
+//translate([29, 2.15,28.8]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module();
+//translate([29,-38,height - lid_height]) menu_switch(cut=false);
+case_base();
+//translate([0,0,height-lid_height]) lid();
 
-round_rounded_rect(width=40, length=10, height=1, corner_radius=1, edge_radius=1);
-//round_rounded_rect(width=45, length=15, height=1, corner_radius=1, edge_radius=1);
