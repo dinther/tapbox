@@ -28,8 +28,8 @@ So: **you tap the downbeat, the mic carries the tempo.** Your tap is *ground
 truth*; the mic is only ever allowed to refine and track *around* it. This single
 rule is why the system stays trustworthy — the mic can never wander off on its own.
 This part of the design hasn't changed since the very first version; what changed
-(see §2 onward) is the DSP that produces the tempo candidate the tap-anchor logic
-judges.
+(see §2 onward) is the DSP that produces the tempo — and how much of the old
+guard-rail machinery it still needs (§8: almost none).
 
 ```mermaid
 flowchart LR
@@ -76,7 +76,7 @@ tracks the same test track correctly, without drift.
 
 The basic-tier `OnsetDetector`/`BandAggregator` chain is still present in
 `mic_task()`, but only to drive the tuning-page chart telemetry — it no longer
-supplies the tempo. See §9.
+supplies the tempo. See §11.
 
 ---
 
@@ -105,7 +105,7 @@ flowchart LR
     I2S["I2S read: ~128 samples/read"] --> RING["RingBuffer&lt;float,2048&gt;"]
     RING -->|"1024 samples available"| FFT["FFTProcessor&lt;1024&gt;<br/>(kissfft, Hamming window)"]
     FFT -->|"magnitudes²"| MEL["MelFilterbank&lt;32,1024&gt;<br/>80Hz–16kHz, log-mel"]
-    FFT -->|"magnitudes"| BAND["BandAggregator (16 bins)<br/>— chart telemetry only, §9"]
+    FFT -->|"magnitudes"| BAND["BandAggregator (16 bins)<br/>— chart telemetry only, §11"]
 ```
 
 512 usable FFT bins (`1024/2`) at 32kHz give 31.25Hz/bin resolution — coarser
@@ -220,72 +220,67 @@ flowchart TD
 
 ---
 
-## 8. Accept window — judging BTrack's candidate
+## 8. Follow/hold — applying BTrack's tempo
 
-Every ~50ms, the latest `BTrack` result is judged against the tap anchor —
-this guard-rail logic is unchanged from the original design and still matters:
-`BTrack`'s own harmonic-template scoring and stability gate already do the heavy
-tempo disambiguation, but a DJ tool still shouldn't let a beat tracker wander
-arbitrarily far from what the operator actually tapped.
+The original design judged every candidate against a tunable **± BPM
+acceptance window** around the tap anchor, then crawled toward accepted values
+through a slew-rate limiter. Both were built for the kick-filter era, when the
+candidate stream was noisy enough that only 30–50% of detections deserved
+trust. Testing against `BTrack` showed the opposite: the candidates were
+consistently *better* than the gates guarding them — the window rejected good
+beats and the slew made Link lag the (correct) measured BPM by tens of
+seconds during a pitch ride. Both were removed. What replaced them:
 
-**(a) Cheap octave-fold safety net** — pull an obvious half/double candidate
-back toward the anchor's octave (rarely needed now that `BTrack` does its own
-disambiguation, but nearly free to keep):
+Confidence is **two-tier**. Above `kSilenceConfidence` (0.3 — the upstream
+library's "not silence" floor) a beat keeps the lock alive and the PLL
+phase-nudging (§9): beat *timing* stays useful even when the tempo estimate
+is smeared. But **moving** the tempo requires `kMoveConfidence` (0.6) — most
+of `BTrack`'s probability mass agreeing on one value. The distinction came
+from a real incident: a 139 BPM track hit a beat-free passage that kept
+confidence just above 0.3 while the estimate wandered to a 164 BPM alias —
+inside the ±20% clamp, so the snap adopted it and Link followed. Requiring
+high confidence to move turns that passage into a HOLD instead.
+
+**FOLLOW** — on each high-confidence beat, the tempo is driven directly:
+
+**(a) Octave fold toward the tap anchor** — the one disambiguation `BTrack`
+demonstrably still needs (§6's ~85–160 BPM aliasing limit). The *operator*
+knows which octave they meant; the fold applies that knowledge:
 
 ```c
 while (cand > anchor * 1.4) cand *= 0.5;
 while (cand < anchor * 0.7) cand *= 2.0;
 ```
 
-**(b) Confidence gate** — a candidate is only considered at all if `BTrack`'s
-confidence exceeds `kSilenceConfidence` (0.3) — the same threshold the upstream
-library uses to decide "trust this reading."
+The fold anchors to the **fixed tap anchor**, not the wandering output —
+anchoring to the output would let a drift feed back on itself.
 
-**(c) Acceptance window** — of the confident candidates, keep only those within
-a fixed **± BPM** of the anchor (`g_micWin`, an absolute tolerance so it reads
-the same at any tempo):
+**(b) Snap, with an anti-flicker deadband** — if the folded candidate differs
+from the tracked tempo by more than 0.4 BPM, the tracked tempo is set **equal
+to it** in one step. No crawl: Link converges as fast as `BTrack` does. Moves
+of 0.4 BPM or less are ignored, so the tempo published to every Link peer
+doesn't flicker with estimation jitter — and because every real move lands
+exactly *on* the candidate (rather than a slew stopping short of it), there is
+no standing measured-vs-Link offset for the phase-lock (§9) to absorb.
 
-```c
-if (fabs(cand - anchor) <= g_micWin_bpm)   // default ±4 BPM
-```
+**(c) Clamp ±20% of the tap anchor** — the last-resort rail. Even if
+everything else misbehaved, the mic can never settle into a half/double-tempo
+basin. Re-tap to move outside the rail.
 
-### Why the window anchors to the *tap*, not the output
+**HOLD** — anything below the move threshold (silence, a breakdown, a
+beat-free passage, a confidence dip mid-transition) freezes the tempo at its
+last good value. Nothing chases low-confidence readings; beats in the
+0.3–0.6 band still maintain the lock and phase alignment, and `tapbox`'s
+lock drops after the timeout (§10) if even those stop — but the tempo number
+stays put until high-confidence beats return.
 
-This is subtle but important, and unchanged from the original design. If the
-window were centred on the *current tracked* value, a tiny downward drift would
-make the window admit the long-interval (low-BPM) detections while rejecting
-their short-interval partners — biasing it **further** down, which feeds back
-and **ratchets** the tempo away. Centring the window on the **fixed tap anchor**
-keeps admission symmetric.
-
----
-
-## 9. Turning a candidate into a stable tempo (unchanged mechanism)
-
-```mermaid
-flowchart LR
-    C["Accepted BTrack candidate"] --> D{"|target − tracked|<br/>over 0.4 BPM?"}
-    D -->|no| F["Freeze — no change"]
-    D -->|yes| S["Slew toward target<br/>(max 0.1%/sec × slew)"]
-    S --> CL["Clamp ±20% of tap anchor"]
-```
-
-1. **Deadband (±0.4 BPM)** — once the tracked tempo is within 0.4 BPM of the
-   accepted candidate, **freeze it** so the displayed number stops flickering.
-2. **Slew limit** — when it does move, cap the rate (`g_micSlew`, in 0.1 %/sec)
-   so a stray reading can't yank it; a real DJ tempo ride sails through.
-3. **Clamp (±20 % of the tap anchor)** — a hard safety rail. Even if everything
-   else misbehaved, the mic can **never** fall into a half/double-tempo basin
-   and lock there. Re-tap to move outside the rail.
-
-This EMA/deadband/slew/clamp machinery, and the Ableton Link publish + phase-lock
-step below it, are DJ-facing UX logic that's orthogonal to which algorithm
-supplies the tempo candidate — they carried over unchanged from the original
-kick-filter design through both DSP rewrites.
+Beat events are latched across the fast 62.5Hz hop loop (`btBeatSincePoll` in
+`mic_task()`) and consumed by the 20Hz poll, so no `beat_event` is ever
+missed between polls.
 
 ---
 
-## 10. Applying to Link — tempo *and* phase-lock (unchanged)
+## 9. Applying to Link — tempo *and* phase-lock (unchanged)
 
 ```c
 abl_link_set_tempo(session, tracked, t);          // always: tempo
@@ -297,20 +292,20 @@ if (locked) {                                      // only once locked:
 }
 ```
 
-Once **locked** (4 consecutive accepted beats), a low-gain **phase-locked loop**
+Once **locked** (4 consecutive confident beats), a low-gain **phase-locked loop**
 gently pulls the beat grid so each detected beat sits on the **nearest** beat —
 never a whole bar, so the bar position you tapped is preserved.
 
 ---
 
-## 11. Lock state & lifecycle
+## 10. Lock state & lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> DisplayOnly: enter Audio mode
     DisplayOnly --> Armed: tap (sets anchor + downbeat)
-    Armed --> Locked: 4 consecutive accepted beats
-    Locked --> Armed: no accepted beat for 6 beat-periods (min 3.5s)
+    Armed --> Locked: 4 consecutive confident beats
+    Locked --> Armed: no confident beat for 6 beat-periods (min 3.5s)
     Armed --> DisplayOnly: leave Audio mode
     Locked --> DisplayOnly: leave Audio mode
     Locked --> Locked: re-tap = re-sync downbeat
@@ -321,19 +316,20 @@ There are two layers of gating now, worth keeping distinct:
 - **`BTrack`'s own confidence/lock** (§6) — internal to the DSP, decides whether
   its BPM candidate is trustworthy at all. Can flicker during an active tempo
   change (e.g. a DJ pitch-bending a track) — that's expected, not a bug.
-- **tapbox's armed/locked state** (this section) — unchanged since the original
-  design: requires 4 *accepted* beats in a row, drops after 6 beat-periods
-  (minimum 3.5s) with no accepted beat.
+- **tapbox's armed/locked state** (this section) — the same 4-in-a-row /
+  timeout machinery as the original design, now fed by *confident* beats
+  (§8's FOLLOW events) instead of accept-window survivors: requires 4
+  confident beats in a row, drops after 6 beat-periods (minimum 3.5s)
+  without one.
 
-A confidence dip in `BTrack` during a tempo bend means no candidates pass the
-accept window for a few beats, which can in turn drop tapbox's own lock if it
-persists past the timeout — but `BTrack`'s own `bpm` field keeps updating
-underneath regardless of confidence, so it typically re-locks within a couple of
-beats once the tempo settles.
+A sustained confidence dip in `BTrack` (silence, a breakdown) puts the tempo
+in HOLD and, past the timeout, drops tapbox's lock — but `BTrack`'s own `bpm`
+field keeps updating underneath regardless of confidence, so it typically
+re-locks within a couple of beats once confident beats return.
 
 ---
 
-## 12. Tuning-chart telemetry — a separate, older signal
+## 11. Tuning-chart telemetry — a separate, older signal
 
 The web config page's **BPM tuning** tab chart (blue energy trace, orange
 threshold, red gate, green/grey onset dots) is **not** driven by the
@@ -349,8 +345,9 @@ when the goal was fixing tempo-tracking accuracy. `g_micThr`/`g_micGate`
 (onset threshold / noise floor) still tune this chart signal's onset detection,
 not `BTrack`'s.
 
-`g_micWin` (accept window) and `g_micSlew` (tempo slew) *do* apply to the real
-tempo path (§8–9) — they're not chart-only.
+Since the follow/hold redesign (§8) removed the accept window and the slew
+limiter, **every remaining slider is chart-only** — nothing on the BPM tuning
+tab influences the real tempo path anymore.
 
 Two internal constants (not exposed as sliders) bridge the old chart-scaling
 convention to the new signal's actual magnitude — `kRawScale` and
@@ -360,7 +357,7 @@ hand-tuned.
 
 ---
 
-## 13. Live event log (web page "Log" tab)
+## 12. Live event log (web page "Log" tab)
 
 A fourth tab on the web config page shows a scrolling, timestamped log of
 notable events — useful for testing without a serial cable attached (e.g.
@@ -386,34 +383,36 @@ persists across a page reload).
 
 ---
 
-## 14. Tuning knobs (web config page only)
+## 13. Tuning knobs (web config page only)
 
 None of these are on-device menu items — the on-device menu only carries
 settings usable without a browser at hand (see `src/main.cpp`, `enum MenuIdx`).
-All four mic-tuning parameters live on the **BPM tuning** tab of the web config
-page:
+Both remaining mic-tuning parameters live on the **BPM tuning** tab of the web
+config page, and both affect **only the chart's telemetry signal** (§11) — the
+real tempo path has no exposed knobs:
 
 | Web field | Variable | Default | What it does |
 |-----------|----------|---------|--------------|
-| Onset threshold | `g_micThr` | 8 | Chart-telemetry onset sensitivity (§12) — inverted onto `OnsetDetector`'s 1–100 sensitivity scale |
-| Noise gate | `g_micGate` | 17 | Chart-telemetry absolute noise floor (§12), log-scale |
-| Accept window | `g_micWin` | 4 | ± BPM tolerance around the tap anchor for the **real** tempo path (§8) |
-| Tempo slew | `g_micSlew` | 10 | Tempo slew limit, 0.1 %/sec, for the **real** tempo path (§9) |
+| Onset threshold | `g_micThr` | 8 | Chart-telemetry onset sensitivity (§11) — inverted onto `OnsetDetector`'s 1–100 sensitivity scale |
+| Noise gate | `g_micGate` | 17 | Chart-telemetry absolute noise floor (§11), log-scale |
 
-The **Kick filter** slider (low-pass cutoff, `g_micFreq`) from the original
-kick-band design has been retired — there's no equivalent single knob in an
-FFT/mel-filterbank pipeline; frequency selectivity is now inherent to the
-filterbank's fixed band structure. The **Accept test (A/B prototype)** selector
-(`g_micGrid`, chain+octave-fold vs. phase-grid) was also retired — `BTrack`'s
-own tempo induction now does that disambiguation internally.
+Retired knobs, in order of departure: the **Kick filter** slider (`g_micFreq`)
+went with the kick-band design — frequency selectivity is inherent to the mel
+filterbank now. The **Accept test (A/B prototype)** selector (`g_micGrid`)
+went when `BTrack`'s tempo induction took over disambiguation. The **Accept
+window** (`g_micWin`) and **Tempo slew** (`g_micSlew`) sliders — and the
+short-lived "Disable acceptance window" testing checkbox — went with the
+follow/hold redesign (§8), after testing showed `BTrack` tracked aggressive
+tempo rides faster and more accurately without them.
 
-Fixed constants (not exposed): deadband 0.4 BPM, clamp ±20%, PLL gain 0.15,
-lock = 4 accepted beats, lock timeout = 6 beat-periods (min 3.5s), `BTrack`
-confidence gate 0.3, `BTrack` warmup ~3s.
+Fixed constants (not exposed): anti-flicker deadband 0.4 BPM, clamp ±20%,
+PLL gain 0.15, lock = 4 confident beats, lock timeout = 6 beat-periods
+(min 3.5s), `BTrack` silence floor 0.3 (lock/PLL tier), tempo-move
+confidence 0.6 (`kMoveConfidence`), `BTrack` warmup ~3s.
 
 ---
 
-## 15. Source map
+## 14. Source map
 
 | Piece | Location |
 |-------|----------|
@@ -421,7 +420,7 @@ confidence gate 0.3, `BTrack` warmup ~3s.
 | Vendored kissfft (BSD-3-Clause) | `src/dsp/third_party/kissfft/` |
 | Basic-tier chart telemetry (`BandAggregator`/`OnsetDetector`/`AGC`/`SilenceDetector`) | `src/dsp/{band_aggregator,onset_detector,agc,silence_detector}.h` |
 | I2S init (stereo, left slot) | `init_i2s_mic()` in `src/main.cpp` |
-| Capture → FFT → Mel → SuperFlux → BTrack → accept-window → Link | `mic_task()` in `src/main.cpp` |
+| Capture → FFT → Mel → SuperFlux → BTrack → follow/hold → Link | `mic_task()` in `src/main.cpp` |
 | Tap grammar (arm / override / re-sync) | `do_tap()` in `src/main.cpp` |
 | Mode + lock display (mode bars, lock dot on beat digit) | `update_display()` in `src/main.cpp` |
 | Live event log (web page Log tab) | `ws_log()` in `src/main.cpp` |

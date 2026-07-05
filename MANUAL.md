@@ -69,7 +69,7 @@ How to use it:
 3. **Tap once on the beat** to accept the detected tempo and set the downbeat to that moment — or **tap four times** if you want to set the tempo yourself and let the mic refine it from there.
 4. The beat digit's decimal point **blinks** while the mic is searching for a stable lock, then goes **solid** once locked. From then on the tempo tracks the music automatically; a single tap any time re-aligns the downbeat without changing the tempo.
 
-The detector analyzes the full spectrum via an FFT/mel-filterbank pipeline rather than a single frequency band, so it isn't limited to a specific kick sound. Four parameters on the web config page's BPM tuning tab (not on-device menu items) fine-tune it — see the technical write-up in `BEAT_DETECTION.md` if you want to understand or adjust them.
+The detector analyzes the full spectrum via an FFT/mel-filterbank pipeline rather than a single frequency band, so it isn't limited to a specific kick sound, and the tempo tracking itself needs no tuning — the web config page's BPM tuning tab carries only a live diagnostic chart and its two display-tuning sliders. See the technical write-up in `BEAT_DETECTION.md` for how it works.
 
 ### CDJ (`Cdj`)
 
@@ -135,7 +135,7 @@ The config page is available at the device's IP address on port 80, from any bro
 
 *(screenshot predates the current tuning parameters and the Log tab — due for a retake)*
 
-**BPM tuning** — four microphone beat-detector parameters plus a live chart of the microphone signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever Sync mode isn't set to Audio, since these settings only affect audio detection.
+**BPM tuning** — microphone beat-detector parameters plus a live chart of the microphone signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever Sync mode isn't set to Audio, since these settings only affect audio detection.
 
 **Log** — a fourth, view-only tab: a live scrolling log of tap/arm/lock events, timestamped, useful for testing without a serial cable attached (e.g. watching tempo-tracking behavior while changing pitch/speed in DJ software). Only active while the tab is open in a browser — see `BEAT_DETECTION.md` for what's logged.
 
@@ -193,14 +193,14 @@ The active mode is shown by a bar on the display (top = CDJ, middle = Manual, bo
 
 ### Audio Tuning
 
-The microphone beat-detector runs an FFT/mel-filterbank onset detector feeding a dynamic-programming beat tracker (`BTrack`) — see `BEAT_DETECTION.md` for the full pipeline. Four parameters are configured on the **web config page**'s BPM tuning tab — there's no practical way to dial these in one tap at a time, and they're rarely touched once set:
+The microphone beat-detector runs an FFT/mel-filterbank onset detector feeding a dynamic-programming beat tracker (`BTrack`) — see `BEAT_DETECTION.md` for the full pipeline. The tempo tracking itself needs **no tuning**: while `BTrack` is highly confident, the tempo follows its estimate directly (so it responds to a pitch ride within a couple of beats); when confidence drops — silence, a breakdown, a beat-free passage — the tempo holds its last good value until confident beats return. Your tapped tempo still anchors which octave the tracker means, and the tempo can never leave ±20% of what you tapped without a re-tap.
 
-- **Accept window** (± BPM, 1–10): how far `BTrack`'s tempo estimate may sit from your tapped tempo before it is ignored. Since you can tap to within ~2 BPM, a small value like 3–4 rejects most spurious hits.
-- **Tempo slew**: how fast the applied tempo is allowed to move (rate limit), in units of 0.1 %/sec.
-- **Onset threshold**: sensitivity of the tuning-chart's onset detector (see below) — how much a spectral change must stand out to count. Higher rejects more false hits.
+Two parameters remain on the **web config page**'s BPM tuning tab, and both affect only the live chart's own onset detector (the display, not the tempo):
+
+- **Onset threshold**: sensitivity of the tuning-chart's onset detector — how much a spectral change must stand out to count. Higher rejects more false hits.
 - **Noise gate** (0–50): an absolute floor for the tuning-chart's onset detector. The scale is logarithmic — low values sit just above room silence, high values reach loud-venue levels — so each step matters more as you go up.
 
-Onset threshold and noise gate tune the **chart's own onset detector** — a simpler, separate signal kept specifically to drive this live display. The actual tempo-tracking algorithm (`BTrack`) does its own onset detection and confidence gating internally, with no exposed tuning knob for it — accept window and tempo slew are what govern how the *real* tracked tempo is allowed to move.
+These tune the **chart's own onset detector** — a simpler, separate signal kept specifically to drive this live display. The actual tempo-tracking algorithm (`BTrack`) does its own onset detection and confidence gating internally, with no exposed tuning knobs.
 
 Above the chart, a live readout shows the **measured BPM** (raw, from `BTrack`, only updates while its confidence is high enough to trust), the **Link BPM** (the smoothed tempo actually driving the session), and the tracking state (idle / searching / locked).
 
@@ -300,6 +300,8 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 - Send `/bpm 128` from an Ableton Live clip to snap the tempo to a specific value at the start of a track.
 - Use `/downbeat` at the top of a new section to re-align the beat grid after a break.
 - Assign `/nudge 40` and `/nudge -40` to fader buttons on a mixing desk for a decisive push/pull, or `/nudge 5` / `/nudge -5` for fine phase correction.
+
+**Nudge notes:** a nudge shifts the shared Link timeline itself, so every connected app sees its beat grid move — it's not local to tapbox. In **Audio mode while locked**, the microphone owns phase alignment: its phase-lock will pull the grid back onto the detected beats within a few beats, undoing the nudge. Nudge is therefore most useful in CDJ and Manual modes; in Audio mode, re-tap the downbeat instead.
 
 ---
 

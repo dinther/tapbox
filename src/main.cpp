@@ -28,10 +28,6 @@
 
 #include "dsp/ring_buffer.h"
 #include "dsp/fft_processor.h"
-#include "dsp/band_aggregator.h"
-#include "dsp/agc.h"
-#include "dsp/onset_detector.h"
-#include "dsp/silence_detector.h"
 #include "dsp/mel_filterbank.h"
 #include "dsp/superflux_onset.h"
 #include "dsp/btrack.h"
@@ -104,12 +100,11 @@ static int g_sigIdx   = 2;             // kSignatures[2] = 4/4
 static int g_brit     = 1;             // brightness level index 0–3 (→ kBritLevels)
 static int g_net      = 0;             // 0=DHCP, 1=static
 static int g_mode     = MODE_AUDIO;    // 0=CDJ, 1=Audio (mic), 2=Manual
-// Mic / beat-detection tuning knobs (live-adjustable while tuning; folded into a
-// preset later). See [[project-inmp441-plan]].
-static int g_micWin   = 4;             // beat-accept window, ± BPM around tapped tempo (1–10)
-static int g_micSlew  = 10;            // tempo slew limit, units of 0.1%/sec (0–50)
-static int g_micThr   = 8;             // onset threshold: energy > baseline*(1+thr/10) (0–30)
-static int g_micGate  = 17;           // absolute noise-gate floor (0–50, log scale: 10^(g/10)×1e-6)
+// Mic tuning knobs — the real tempo path's three gates (see mic_task),
+// exposed as sliders because none are derivable analytically.
+static int g_micFloor    = -100;       // absolute level floor, dB of mean FFT power (-100 = off, up to -10)
+static int g_micConfSil  = 30;         // BTrack confidence ×100 to keep lock/PLL fed (0–100)
+static int g_micConfMove = 60;         // BTrack confidence ×100 required to MOVE the tempo (0–100)
 static int g_ip[4]    = {192, 168,   1, 200};
 static int g_sn[4]    = {255, 255, 255,   0};
 static int g_gt[4]    = {192, 168,   1,   1};
@@ -121,11 +116,13 @@ static char g_wifi_pass[64] = {};
 struct RtcSettings {
     uint32_t magic;
     int sigIdx, brit, net, mode;
-    int micWin, micSlew, micThr, micGate;
+    int micFloor, micConfSil, micConfMove;
     int ip[4], sn[4], gt[4];
     char wifi_ssid[64], wifi_pass[64];
 };
-static constexpr uint32_t RTC_MAGIC = 0xCAFEB00B;
+// Bumped whenever RtcSettings' layout changes — a stale layout from the
+// pre-OTA firmware must not be restored field-shifted into NVS.
+static constexpr uint32_t RTC_MAGIC = 0xCAFEB00E;
 RTC_DATA_ATTR static RtcSettings s_rtc;
 
 // ── Core globals ───────────────────────────────────────────────────────────────
@@ -163,18 +160,14 @@ static volatile double   g_mic_tracked = 0.0;   // adaptive anchor / applied BPM
 static volatile double   g_mic_tapAnchor = 0.0; // last tap-set tempo (clamp reference)
 
 // Live telemetry for the web page's audio-tuning chart — written by mic_task's
-// 20Hz onset/beat-tracking step, read every 50ms by the WS push task. Energy
-// is still peak-held and onset still latched between pushes so a push landing
-// mid-cycle can't miss a detection.
-static volatile double g_tele_energy    = 0.0;  // peak since last push; reset by push task
-static volatile double g_tele_baseline  = 0.0;
-static volatile double g_tele_threshold = 0.0;  // OnsetDetector's adaptive threshold, same units as energy
-static volatile double g_tele_gate      = 0.0;
-static volatile uint8_t g_tele_onset    = 0;  // latched since last push (0=none 1=rejected 2=accepted); reset by push task
-static volatile float   g_tele_dev      = 999.f;  // folded-BPM deviation from anchor for the latched onset (999 = not judged)
-static volatile uint32_t g_tele_onsetMs = 0;      // tPeak of the latched onset (ms) — page anchors beat slots sub-tick
-// Running totals (wrap-safe on the client): every detected onset, and every
-// onset that passed the accept window and actually influenced the tempo.
+// 20Hz poll, read every 50ms by the WS push task. Beat is latched between
+// pushes so a push landing mid-cycle can't miss one.
+static volatile float  g_tele_level     = -120.f; // latest hop's mean FFT power, dB — page shows it for the floor slider
+static volatile uint8_t g_tele_onset    = 0;  // latched beat since last push (0=none 1=lock-tier 2=move-tier); reset by push task
+static volatile float   g_tele_conf     = 0.f;    // BTrack confidence at last poll — chart's confidence trace
+static volatile uint32_t g_tele_onsetMs = 0;      // beat hop's time (ms) — page places the tick sub-sample
+// Running totals (wrap-safe on the client): beats seen (floor + lock tier),
+// and beats that cleared the move tier and could move the tempo.
 static volatile uint32_t g_tele_det = 0;
 static volatile uint32_t g_tele_acc = 0;
 
@@ -265,10 +258,9 @@ static void nvs_load_settings() {
     if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx   = (int)v;
     if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 0 && v <= 3)          g_brit     = (int)v;
     if (nvs_get_i32(h, "mode", &v) == ESP_OK && v >= 0 && v <= 2)          g_mode     = (int)v;
-    if (nvs_get_i32(h, "mwin", &v) == ESP_OK && v >= 0 && v <= 10)         g_micWin   = (int)v;
-    if (nvs_get_i32(h, "mslew",&v) == ESP_OK && v >= 0 && v <= 50)         g_micSlew  = (int)v;
-    if (nvs_get_i32(h, "mthr", &v) == ESP_OK && v >= 0 && v <= 30)         g_micThr   = (int)v;
-    if (nvs_get_i32(h, "mgate",&v) == ESP_OK && v >= 0 && v <= 50)         g_micGate  = (int)v;
+    if (nvs_get_i32(h, "mfloor",&v)== ESP_OK && v >= -100 && v <= -10)     g_micFloor = (int)v;
+    if (nvs_get_i32(h, "mcsil",&v) == ESP_OK && v >= 0 && v <= 100)        g_micConfSil  = (int)v;
+    if (nvs_get_i32(h, "mcmove",&v)== ESP_OK && v >= 0 && v <= 100)        g_micConfMove = (int)v;
     if (nvs_get_i32(h, "net",  &v) == ESP_OK && v >= 0 && v <= 2)          g_net      = (int)v;
     if (nvs_get_i32(h, "ip0",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[0]    = (int)v;
     if (nvs_get_i32(h, "ip1",  &v) == ESP_OK && v >= 0 && v <= 255)        g_ip[1]    = (int)v;
@@ -296,10 +288,9 @@ static void nvs_save_settings() {
     nvs_set_i32(h, "sig",  (int32_t)g_sigIdx);
     nvs_set_i32(h, "brit", (int32_t)g_brit);
     nvs_set_i32(h, "mode", (int32_t)g_mode);
-    nvs_set_i32(h, "mwin", (int32_t)g_micWin);
-    nvs_set_i32(h, "mslew",(int32_t)g_micSlew);
-    nvs_set_i32(h, "mthr", (int32_t)g_micThr);
-    nvs_set_i32(h, "mgate",(int32_t)g_micGate);
+    nvs_set_i32(h, "mfloor",(int32_t)g_micFloor);
+    nvs_set_i32(h, "mcsil",(int32_t)g_micConfSil);
+    nvs_set_i32(h, "mcmove",(int32_t)g_micConfMove);
     nvs_set_i32(h, "net",  (int32_t)g_net);
     nvs_set_i32(h, "ip0",  (int32_t)g_ip[0]);
     nvs_set_i32(h, "ip1",  (int32_t)g_ip[1]);
@@ -319,7 +310,7 @@ static void nvs_save_settings() {
 
 static void factory_reset() {
     g_sigIdx = 2; g_brit = 1; g_mode = MODE_AUDIO;
-    g_micWin = 4; g_micSlew = 10; g_micThr = 8; g_micGate = 17;
+    g_micFloor = -100; g_micConfSil = 30; g_micConfMove = 60;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
     g_sn[0] = 255; g_sn[1] = 255; g_sn[2] = 255; g_sn[3] =   0;
@@ -771,8 +762,8 @@ static void rtc_save_settings() {
     s_rtc.magic    = RTC_MAGIC;
     s_rtc.sigIdx   = g_sigIdx;
     s_rtc.brit     = g_brit;     s_rtc.mode     = g_mode;    s_rtc.net = g_net;
-    s_rtc.micWin   = g_micWin;   s_rtc.micSlew  = g_micSlew;
-    s_rtc.micThr   = g_micThr;   s_rtc.micGate  = g_micGate;
+    s_rtc.micFloor = g_micFloor;
+    s_rtc.micConfSil = g_micConfSil; s_rtc.micConfMove = g_micConfMove;
     for (int i = 0; i < 4; i++) { s_rtc.ip[i] = g_ip[i]; s_rtc.sn[i] = g_sn[i]; s_rtc.gt[i] = g_gt[i]; }
     strncpy(s_rtc.wifi_ssid, g_wifi_ssid, sizeof(s_rtc.wifi_ssid));
     strncpy(s_rtc.wifi_pass, g_wifi_pass, sizeof(s_rtc.wifi_pass));
@@ -788,10 +779,9 @@ static void rtc_restore_to_nvs_if_valid() {
     nvs_set_i32(h, "sig",       s_rtc.sigIdx);
     nvs_set_i32(h, "brit",      s_rtc.brit);
     nvs_set_i32(h, "mode",      s_rtc.mode);
-    nvs_set_i32(h, "mwin",      s_rtc.micWin);
-    nvs_set_i32(h, "mslew",     s_rtc.micSlew);
-    nvs_set_i32(h, "mthr",      s_rtc.micThr);
-    nvs_set_i32(h, "mgate",     s_rtc.micGate);
+    nvs_set_i32(h, "mfloor",    s_rtc.micFloor);
+    nvs_set_i32(h, "mcsil",     s_rtc.micConfSil);
+    nvs_set_i32(h, "mcmove",    s_rtc.micConfMove);
     nvs_set_i32(h, "net",       s_rtc.net);
     nvs_set_i32(h, "ip0",  s_rtc.ip[0]); nvs_set_i32(h, "ip1",  s_rtc.ip[1]);
     nvs_set_i32(h, "ip2",  s_rtc.ip[2]); nvs_set_i32(h, "ip3",  s_rtc.ip[3]);
@@ -973,42 +963,35 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<canvas id=mchart width=320 height=330></canvas>"
         "<div id=mleg style=\"display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;"
         "color:#888;margin:6px 0 2px\">"
-        "<span style=color:#0af>&#9644; energy</span>"
-        "<span style=color:#e90>&#9644; threshold</span>"
-        "<span style=color:#c33>&#9644; gate</span>"
-        "<span style=color:#2ecc71>&#9679; accepted</span>"
-        "<span style=color:#888>&#9711; rejected</span>"
-        "<span style=color:#B7F7A5>&#9615; expected beat</span>"
+        "<span style=color:#0af>&#9644; measured BPM</span>"
+        "<span style=color:#B7F7A5>&#9644; Link BPM</span>"
+        "<span style=color:#e90>&#9644; confidence</span>"
+        "<span style=color:#2ecc71>&#9615; beat moved tempo</span>"
+        "<span style=color:#888>&#9615; beat held</span>"
         "</div>"
         "<div id=mstat>connecting&hellip;</div>"
-        "<div class=mnum id=mnum2>&nbsp;</div>");
+        "<div class=mnum id=mnum2>&nbsp;</div>"
+        "<div class=mnum id=mconf>&nbsp;</div>");
 
-    snprintf(tmp, sizeof(tmp), "<label>Accept window: <span id=mwinv>%d</span> &plusmn;BPM</label>", g_micWin);
+    snprintf(tmp, sizeof(tmp), "<label>Level floor: <span id=mfloorv>%d</span> dB</label>", g_micFloor);
     httpd_resp_sendstr_chunk(req, tmp);
     snprintf(tmp, sizeof(tmp),
-        "<input name=mwin type=range min=1 max=10 value=%d "
-        "oninput=\"mwinv.textContent=this.value;applyField('mwin',this.value)\">", g_micWin);
+        "<input name=mfloor type=range min=-100 max=-10 value=%d "
+        "oninput=\"mfloorv.textContent=this.value;applyField('mfloor',this.value)\">", g_micFloor);
     httpd_resp_sendstr_chunk(req, tmp);
 
-    snprintf(tmp, sizeof(tmp), "<label>Tempo slew: <span id=mslewv>%d</span> (0.1%%/sec)</label>", g_micSlew);
+    snprintf(tmp, sizeof(tmp), "<label>Lock confidence: <span id=mcsilv>%.2f</span></label>", g_micConfSil / 100.0);
     httpd_resp_sendstr_chunk(req, tmp);
     snprintf(tmp, sizeof(tmp),
-        "<input name=mslew type=range min=0 max=50 value=%d "
-        "oninput=\"mslewv.textContent=this.value;applyField('mslew',this.value)\">", g_micSlew);
+        "<input name=mcsil type=range min=0 max=100 value=%d "
+        "oninput=\"mcsilv.textContent=(this.value/100).toFixed(2);applyField('mcsil',this.value)\">", g_micConfSil);
     httpd_resp_sendstr_chunk(req, tmp);
 
-    snprintf(tmp, sizeof(tmp), "<label>Onset threshold: <span id=mthrv>%d</span></label>", g_micThr);
+    snprintf(tmp, sizeof(tmp), "<label>Move confidence: <span id=mcmovev>%.2f</span></label>", g_micConfMove / 100.0);
     httpd_resp_sendstr_chunk(req, tmp);
     snprintf(tmp, sizeof(tmp),
-        "<input name=mthr type=range min=0 max=30 value=%d "
-        "oninput=\"mthrv.textContent=this.value;applyField('mthr',this.value)\">", g_micThr);
-    httpd_resp_sendstr_chunk(req, tmp);
-
-    snprintf(tmp, sizeof(tmp), "<label>Noise gate: <span id=mgatev>%d</span></label>", g_micGate);
-    httpd_resp_sendstr_chunk(req, tmp);
-    snprintf(tmp, sizeof(tmp),
-        "<input name=mgate type=range min=0 max=50 value=%d "
-        "oninput=\"mgatev.textContent=this.value;applyField('mgate',this.value)\">", g_micGate);
+        "<input name=mcmove type=range min=0 max=100 value=%d "
+        "oninput=\"mcmovev.textContent=(this.value/100).toFixed(2);applyField('mcmove',this.value)\">", g_micConfMove);
     httpd_resp_sendstr_chunk(req, tmp);
 
     httpd_resp_sendstr_chunk(req,
@@ -1042,7 +1025,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "var st=document.querySelector('[name=net]').value=='1';"
           "['ip','sn','gw'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!st;});"
           "var au=document.querySelector('[name=mode]').value=='1';"
-          "['mwin','mslew','mthr','mgate'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
+          "['mfloor','mcsil','mcmove'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
           "mrst.disabled=!au;"
           "mchart.style.opacity=au?1:.35;"
           "mnote.style.display=au?'none':'block';"
@@ -1064,18 +1047,23 @@ static esp_err_t http_get_root(httpd_req_t *req) {
 
         // Must mirror the firmware defaults in factory_reset()
         "function mDefaults(){"
-          "var d={mwin:4,mslew:10,mthr:8,mgate:17};"
+          "var d={mfloor:-100,mcsil:30,mcmove:60};"
           "for(var k in d){"
             "document.querySelector('[name='+k+']').value=d[k];"
             "document.getElementById(k+'v').textContent=d[k];"
             "applyField(k,d[k]);"
           "}"
+          // Confidence spans display 0.00-1.00, not the raw slider integer
+          "mcsilv.textContent='0.30';mcmovev.textContent='0.60';"
         "}"
 
-        "var mHist=[],mStats=[],mLastMsg=0,mAnchor=0,mMarks=[],logLines=[];"
+        // Telemetry CSV (20Hz): levelDb,conf,beat(0/1/2),raw,trk,state,seen,moved,anchor,beatAgeMs
+        // History = 120 samples x 50ms = 6s window.
+        "var mHist=[],mStats=[],mLastMsg=0,logLines=[];"
         // Cached once — mDraw runs at display rate, no per-frame DOM lookups
         "var mC=document.getElementById('mchart'),mCtx=mC.getContext('2d'),"
-        "mW=mC.width,mH=mC.height,mWinEl=document.querySelector('[name=mwin]');"
+        "mW=mC.width,mH=mC.height,"
+        "lockEl=document.querySelector('[name=mcsil]'),moveEl=document.querySelector('[name=mcmove]');"
         "function mConnect(){"
           "var ws=new WebSocket('ws://'+location.host+'/ws');"
           "ws.onopen=function(){mstat.textContent='live';};"
@@ -1090,84 +1078,75 @@ static esp_err_t http_get_root(httpd_req_t *req) {
               "return;"
             "}"
             "var p=ev.data.split(',');"
-            "var pt={e:+p[0],b:+p[1],t:+p[2],g:+p[3],o:+p[4]};"
+            // f: beat tick's sub-sample shift left (beat age / 50ms)
+            "var pt={c:+p[1],r:+p[3],k:+p[4],b:+p[2],a:+p[8]||0,f:(+p[9]||0)/50};"
             "mHist.push(pt);"
-            "if(mHist.length>60){mHist.shift();"  // 60 samples x 50ms = ~3s window
-              "for(var j=0;j<mMarks.length;j++)mMarks[j].x-=1;"
-              "if(mMarks.length&&mMarks[0].x<-10)mMarks.shift();"
-            "}"
+            "if(mHist.length>120)mHist.shift();"
             "mLastMsg=performance.now();"
-            "var raw=+p[5],trk=+p[6],st=+p[7];mAnchor=+p[10]||0;"
-            // Expected-beat lines: each is created ONCE — an accepted beat puts the
-            // next line one period after itself (sub-tick via onset-age p[12]); a
-            // line whose time passes with no accepted beat spawns its successor one
-            // period later. Lines scroll with the chart and never move.
-            "if(mAnchor>0){"
-              "var i=mHist.length-1,P=1200/mAnchor;"
-              "if(pt.o===2)mMarks.push({x:i-(+p[12]||0)/50+P});"
-              "else if(mMarks.length){var t=mMarks[mMarks.length-1];"
-                "while(t.x<i){t={x:t.x+P};mMarks.push(t);}"
-              "}"
-            "}else mMarks=[];"
-            "mrawv.textContent=raw?raw.toFixed(1):'\\u2014';"
-            "mtrkv.textContent=trk?trk.toFixed(1):'\\u2014';"
+            "var st=+p[5];"
+            "mrawv.textContent=pt.r?pt.r.toFixed(1):'\\u2014';"
+            "mtrkv.textContent=pt.k?pt.k.toFixed(1):'\\u2014';"
             "mstate.textContent=st==2?'LOCKED':st==1?'SEARCHING':'IDLE';"
             "mstate.style.color=st==2?'#B7F7A5':st==1?'#e90':'#777';"
-            "mStats.push({ts:Date.now(),d:+p[8],a:+p[9]});"
+            "mStats.push({ts:Date.now(),d:+p[6],a:+p[7]});"
             "while(mStats.length&&Date.now()-mStats[0].ts>10000)mStats.shift();"
             "if(mStats.length>1){"
               "var f=mStats[0],l=mStats[mStats.length-1];"
               "var dd=(l.d-f.d+100000)%100000,da=(l.a-f.a+100000)%100000;"
-              "mnum2.innerHTML='Last 10s: <b>'+dd+'</b> beats detected &nbsp;\\u00b7&nbsp; <b>'+da+'</b> accepted';"
+              "mnum2.innerHTML='Last 10s: <b>'+dd+'</b> beats &nbsp;\\u00b7&nbsp; <b>'+da+'</b> moved tempo';"
             "}"
+            "mconf.innerHTML='Confidence <b>'+(+p[1]).toFixed(2)+'</b> &nbsp;\\u00b7&nbsp; Level <b>'+(+p[0]).toFixed(0)+'</b> dB';"
           "};"
         "}"
-        // Drawn by a requestAnimationFrame loop: frac (0..1) is progress toward
-        // the next 20 Hz data frame, so the scroll glides instead of stepping
-        // one sample (~5 px) at a time.
+        // Two strips: BPM (top, scaled around the anchor so the ±20% clamp
+        // band is always in view) and confidence 0..1 (bottom, with the two
+        // slider thresholds as live dashed lines and beat ticks). frac (0..1)
+        // is progress toward the next 20Hz frame so the scroll glides.
         "function mDraw(frac){"
-          // Right edge = now. Upcoming windows scroll in from the right like
-          // everything else — the eye reads the scroll, no cursor needed.
-          "var ctx=mCtx,W=mW,H=mH;"
+          "var ctx=mCtx,W=mW,H=mH,BH=205,CT=215,CH=H-CT;"
           "ctx.clearRect(0,0,W,H);"
-          // Fixed log scale, 5 decades (1..1e5 chart units) — never rescales.
-          "function y(v){return H-Math.max(0,Math.min(Math.log10(v<1?1:v)/5,1))*H;}"
-          "var n=mHist.length,per=W/((n-1)||1);"
-          // Sub-sample scroll only once the buffer is full (before that, nothing shifts)
-          "function xOf(v){return (v-(n>=60?frac:0))*per;}"
-          "function dot(x,yy,acc){"
-            "if(acc){ctx.fillStyle='#2ecc71';"
-              "ctx.beginPath();ctx.arc(x,yy,3.5,0,7);ctx.fill();}"
-            "else{ctx.strokeStyle='#888';ctx.lineWidth=1.5;"
-              "ctx.beginPath();ctx.arc(x,yy,3,0,7);ctx.stroke();}"
+          "var n=mHist.length,per=W/119;"
+          "function xOf(v){return (v-(n>=120?frac:0))*per;}"
+          "var last=mHist[n-1]||{a:0,k:0};"
+          "var ctr=last.a>0?last.a:(last.k>0?last.k:120);"
+          "var lo=ctr*0.72,hi=ctr*1.28;"
+          "function yB(v){var t=(v-lo)/(hi-lo);if(t<0)t=0;if(t>1)t=1;return BH-t*BH;}"
+          "function yC(v){if(v<0)v=0;if(v>1)v=1;return CT+CH-v*CH;}"
+          // BPM strip: clamp band + anchor line
+          "if(last.a>0){"
+            "var y1=yB(last.a*1.2),y2=yB(last.a*0.8);"
+            "ctx.fillStyle='rgba(183,247,165,0.07)';ctx.fillRect(0,y1,W,y2-y1);"
+            "ctx.strokeStyle='#555';ctx.setLineDash([2,4]);ctx.lineWidth=1;"
+            "ctx.beginPath();ctx.moveTo(0,yB(last.a));ctx.lineTo(W,yB(last.a));ctx.stroke();ctx.setLineDash([]);"
           "}"
-          // Expected-beat line: where the perfect next beat should fall
-          "function band(x){var xc=xOf(x);"
-            "if(xc<0||xc>W)return;"
-            "ctx.strokeStyle='rgba(183,247,165,0.8)';ctx.lineWidth=1;ctx.setLineDash([2,3]);"
-            "ctx.beginPath();ctx.moveTo(xc,0);ctx.lineTo(xc,H);ctx.stroke();ctx.setLineDash([]);"
-          "}"
-          // Faint decade gridlines (10, 100, 1k, 10k)
-          "ctx.strokeStyle='#1e1e1e';ctx.lineWidth=1;ctx.setLineDash([]);"
-          "for(var d=1;d<5;d++){var gy=y(Math.pow(10,d));"
-            "ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}"
-          // All expected-beat lines — created once, scroll with the chart
-          "for(var m=0;m<mMarks.length;m++)band(mMarks[m].x);"
-          "var last=mHist[n-1]||{t:0,g:0};"
-          "ctx.lineWidth=2;"
-          "ctx.strokeStyle='#e90';ctx.setLineDash([4,3]);"
-          "ctx.beginPath();ctx.moveTo(0,y(last.t));ctx.lineTo(W,y(last.t));ctx.stroke();"
-          "ctx.strokeStyle='#c33';"
-          "ctx.beginPath();ctx.moveTo(0,y(last.g));ctx.lineTo(W,y(last.g));ctx.stroke();"
+          // Strip separator
+          "ctx.strokeStyle='#222';ctx.lineWidth=1;"
+          "ctx.beginPath();ctx.moveTo(0,BH+5);ctx.lineTo(W,BH+5);ctx.stroke();"
+          // Beat ticks across the confidence strip (bright = moved tempo)
+          "for(var i=0;i<n;i++){var b=mHist[i].b;if(b){"
+            "var xt=xOf(i-mHist[i].f);"
+            "ctx.strokeStyle=b===2?'rgba(46,204,113,0.9)':'rgba(136,136,136,0.55)';"
+            "ctx.lineWidth=b===2?2:1;"
+            "ctx.beginPath();ctx.moveTo(xt,CT);ctx.lineTo(xt,H);ctx.stroke();}}"
+          // Threshold lines, read live from the sliders
+          "var lk=(+lockEl.value||0)/100,mv=(+moveEl.value||0)/100;"
+          "ctx.setLineDash([4,3]);ctx.lineWidth=1;"
+          "ctx.strokeStyle='#888';ctx.beginPath();ctx.moveTo(0,yC(lk));ctx.lineTo(W,yC(lk));ctx.stroke();"
+          "ctx.strokeStyle='#2ecc71';ctx.beginPath();ctx.moveTo(0,yC(mv));ctx.lineTo(W,yC(mv));ctx.stroke();"
           "ctx.setLineDash([]);"
-          "ctx.strokeStyle='#0af';ctx.lineWidth=2;ctx.beginPath();"
-          "for(var i=0;i<n;i++){"
-            "var x=xOf(i);"
-            "if(i===0)ctx.moveTo(x,y(mHist[i].e));else ctx.lineTo(x,y(mHist[i].e));"
-          "}"
+          // Confidence trace
+          "ctx.strokeStyle='#e90';ctx.lineWidth=2;ctx.beginPath();"
+          "for(i=0;i<n;i++){var x=xOf(i),y=yC(mHist[i].c);"
+            "if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}"
           "ctx.stroke();"
-          // Onset dots sit ON the energy-trace vertices (green filled = accepted)
-          "for(var i=0;i<n;i++){if(mHist[i].o)dot(xOf(i),y(mHist[i].e),mHist[i].o===2);}"
+          // BPM traces — raw (cyan, gaps where confidence-gated to 0) and Link (green)
+          "function trace(key,col){ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();var pen=false;"
+            "for(var j=0;j<n;j++){var v=mHist[j][key];"
+              "if(v>0){var xx=xOf(j),yy=yB(v);if(pen)ctx.lineTo(xx,yy);else{ctx.moveTo(xx,yy);pen=true;}}"
+              "else pen=false;}"
+            "ctx.stroke();}"
+          "trace('r','#0af');"
+          "trace('k','#B7F7A5');"
         "}"
         // Dev hook: ?js=http://<pc-ip>:8000/tuning.js loads the chart code from an
         // external server (docs/tuning.js) INSTEAD of starting the embedded copy —
@@ -1242,10 +1221,9 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
     if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount)   g_sigIdx   = v; }
     if (form_field(body, "mode", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 2)          g_mode     = v; }
     if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 3)           g_brit     = v; }
-    if (form_field(body, "mwin", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 1 && v <= 10)           g_micWin   = v; }
-    if (form_field(body, "mslew",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micSlew  = v; }
-    if (form_field(body, "mthr", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 30)           g_micThr   = v; }
-    if (form_field(body, "mgate",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 50)           g_micGate  = v; }
+    if (form_field(body, "mfloor",tmp,sizeof(tmp))) { int v = atoi(tmp); if (v >= -100 && v <= -10)       g_micFloor = v; }
+    if (form_field(body, "mcsil",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 100)          g_micConfSil  = v; }
+    if (form_field(body, "mcmove",tmp,sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 100)          g_micConfMove = v; }
     free(body);
 
     nvs_save_settings();
@@ -1343,19 +1321,17 @@ static void ws_push_task(void *) {
         if (!ws_client_connected()) continue;
         WsPushArg *a = (WsPushArg *)malloc(sizeof(WsPushArg));
         if (!a) continue;
-        // e,baseline,threshold,gate,onset(0/1/2),rawBPM,trackedBPM,state,detected,accepted,anchorBPM,devBPM,onsetAgeMs
+        // levelDb,confidence,beat(0/1/2),rawBPM,trackedBPM,state,seen,moved,anchorBPM,beatAgeMs
         uint32_t age = g_tele_onset ? (now_ms() - g_tele_onsetMs) : 0;
         if (age > 99) age = 99;
-        snprintf(a->text, sizeof(a->text), "%.0f,%.0f,%.0f,%.0f,%d,%.1f,%.1f,%d,%u,%u,%.1f,%.1f,%u",
-                 g_tele_energy * 1e6, g_tele_baseline * 1e6,
-                 g_tele_threshold * 1e6, g_tele_gate * 1e6,
+        snprintf(a->text, sizeof(a->text), "%.1f,%.2f,%d,%.1f,%.1f,%d,%u,%u,%.1f,%u",
+                 (double)g_tele_level, (double)g_tele_conf,
                  (int)g_tele_onset,
                  (double)g_mic_bpm, (double)g_mic_tracked,
                  g_mic_locked ? 2 : (g_mic_armed ? 1 : 0),
                  (unsigned)(g_tele_det % 100000), (unsigned)(g_tele_acc % 100000),
-                 (double)g_mic_tapAnchor, (double)g_tele_dev, (unsigned)age);
-        g_tele_energy = 0.0;      // restart peak-hold window
-        g_tele_onset  = 0;        // consume the latched beat (0=none 1=rejected 2=accepted)
+                 (double)g_mic_tapAnchor, (unsigned)age);
+        g_tele_onset = 0;  // consume the latched beat (0=none 1=lock-tier 2=move-tier)
         if (httpd_queue_work(s_httpd, ws_send_async, a) != ESP_OK) free(a);
     }
 }
@@ -2088,18 +2064,18 @@ static void mic_task(void *) {
 
     static constexpr size_t FFT_SIZE = 1024;
     static constexpr size_t HOP_SIZE = 512;
-    // Not yet tunable from hardware — starting values from the vendor's own
-    // basic-tier defaults / CSV convention; expect to retune once flashed
-    // (mic self-noise and room acoustics aren't derivable analytically).
-    static constexpr float kRawScale      = 1.0f / 20.0f;
-    // Calibrated from real hardware logs (basic-tier pipeline): raw spectral
-    // flux runs ~1e-8..4e-7, while g_micGate's formula (10^(g/10)*1e-6)
-    // bottoms out at ~1.26e-6 for any nonzero slider value — flux needed
-    // pulling up ~2 orders of magnitude to land in the gate's usable range.
-    // Still an approximation; revisit once there's a clear kick-vs-quiet
-    // contrast to tune against. Telemetry-only — BTrack/SuperFlux below own
-    // the actual tempo tracking now, not gated by this.
-    static constexpr float kTeleFluxScale = 100.0f;
+    // Gates on the real tempo path, all sliders on the tuning page because
+    // none of them are derivable analytically — they depend on the mic, the
+    // room, and how loud the music is:
+    //  - g_micFloor (dB): absolute level floor. SuperFlux measures RELATIVE
+    //    spectral change, so quiet-but-impulsive sounds (typing!) produce
+    //    confident periodic beats out of a silent room. Below the floor a
+    //    beat doesn't count for ANY tier — tempo holds, lock decays.
+    //  - g_micConfSil / g_micConfMove (×100): two-tier confidence. Lock tier
+    //    keeps lock+PLL fed (beat TIMING is useful even when the tempo
+    //    estimate is smeared); move tier gates actually CHANGING the tempo
+    //    (split after a beat-free passage at conf ~0.3 walked 139 BPM to a
+    //    164 alias inside the ±20% clamp).
 
     static int32_t samples[256];
     static float norm[128];
@@ -2108,23 +2084,6 @@ static void mic_task(void *) {
     static float melFrame[32];
     static audio_dsp::RingBuffer<float, 2048> ring;
     static audio_dsp::FFTProcessor<FFT_SIZE> fft(MIC_SAMPLE_RATE);
-    static audio_dsp::BandAggregator bandAgg(MIC_SAMPLE_RATE, FFT_SIZE);
-    static audio_dsp::AGC agcBass(audio_dsp::AGC_NORMAL);
-    static audio_dsp::AGC agcMid(audio_dsp::AGC_NORMAL);
-    static audio_dsp::AGC agcHigh(audio_dsp::AGC_NORMAL);
-    static audio_dsp::AGC agcAmp(audio_dsp::AGC_NORMAL);
-    // Gate disabled (squelch=0 -> threshold=0 -> never below gate) until real
-    // hardware signal levels are known. The vendor's own default (10.0, i.e.
-    // threshold=5.0) assumes their FFT/mic gain scale, which is not ours —
-    // leaving it in caused onsetDet.update() to never run at all (flux/mean/
-    // threshold telemetry frozen). TUNE ON HARDWARE once real band-energy
-    // magnitudes are observed.
-    static audio_dsp::SilenceDetector silenceDet(0.0f);
-    // Basic-tier onset detector — kept ONLY for the tuning-chart telemetry
-    // (flux/mean/threshold), already calibrated against real hardware. It no
-    // longer drives the tempo; BTrack/SuperFlux below do that.
-    static audio_dsp::OnsetDetector onsetDet(50, audio_dsp::OnsetDetector::MODE_SPECTRAL_FLUX, 60, 150);
-    static audio_dsp::BandEnergies16 latestEnergies{};
 
     // Pro-tier tempo pipeline — runs every FFT hop (62.5Hz), NOT decoupled to
     // the slower 20Hz telemetry poll below: BTrack::process() is a stateful
@@ -2136,9 +2095,18 @@ static void mic_task(void *) {
     static audio_dsp::BTrack::Result latestBTrackResult{};
     melFb.setup(MIC_SAMPLE_RATE, 80.0f, 16000.0f);
 
-    uint32_t lastOnset = 0, lastApply = 0, lastDbg = 0, lastPollMs = 0;
+    uint32_t lastOnset = 0, lastDbg = 0, lastPollMs = 0;
     int      consec   = 0;
     bool     wasAudio  = (g_mode == MODE_AUDIO);
+    // Latches true if BTrack predicted a beat on ANY hop since the last 20Hz
+    // poll below — the fast hop loop (62.5Hz) overwrites latestBTrackResult
+    // every iteration, so reading its beat_event directly at poll time would
+    // miss most beats. beatLevelDb/beatMs capture the beat hop's own frame
+    // level and time, so the floor gate judges the beat's actual energy.
+    bool     btBeatSincePoll = false;
+    float    beatLevelDb     = -120.f;
+    uint32_t beatMs          = 0;
+    float    frameLevelDb    = -120.f;  // most recent hop's mean FFT power, dB
 
     while (true) {
         size_t br = 0;
@@ -2163,13 +2131,24 @@ static void mic_task(void *) {
         while (ring.available() >= FFT_SIZE) {
             ring.peek(fftBuf, FFT_SIZE);
             fft.process(fftBuf);
-            latestEnergies = bandAgg.aggregate16(fft.magnitudes(), fft.bin_count());
 
             const float *mags = fft.magnitudes();
-            for (size_t i = 0; i < FFT_SIZE / 2; i++) magsSq[i] = mags[i] * mags[i];
+            float power = 0.f;
+            for (size_t i = 0; i < FFT_SIZE / 2; i++) {
+                magsSq[i] = mags[i] * mags[i];
+                power += magsSq[i];
+            }
+            power /= (float)(FFT_SIZE / 2);
+            frameLevelDb = (power > 1e-12f) ? 10.0f * log10f(power) : -120.f;
+
             melFb.process(magsSq, melFrame);
             auto sf = superflux.process(melFrame);
             latestBTrackResult = btrack.process(sf.strength);
+            if (latestBTrackResult.beat_event) {
+                btBeatSincePoll = true;
+                beatLevelDb = frameLevelDb;  // the beat hop's own energy
+                beatMs = now_ms();
+            }
 
             ring.advance(HOP_SIZE);
         }
@@ -2177,131 +2156,92 @@ static void mic_task(void *) {
         uint32_t now = now_ms();
         bool isAudio = (g_mode == MODE_AUDIO);
         if (!isAudio) {
-            g_mic_armed = false; g_mic_locked = false; consec = 0;
-            if (wasAudio) { onsetDet.reset(); superflux.reset(); btrack.reset(); }
+            g_mic_armed = false; g_mic_locked = false; consec = 0; btBeatSincePoll = false;
+            if (wasAudio) { superflux.reset(); btrack.reset(); }
         }
         wasAudio = isAudio;
 
-        // Outer telemetry step runs at 20 Hz — matches ws_push_task's own
-        // cadence and the basic-tier OnsetDetector's rolling-window tuning
-        // (kept here purely for the chart, see above).
+        // Outer poll runs at 20 Hz — matches ws_push_task's telemetry cadence.
         if ((now - lastPollMs) < 50) continue;
         lastPollMs = now;
 
-        // g_micThr (0-30, higher = stricter) inverts onto OnsetDetector's
-        // sensitivity (1-100, higher = more detections) — preserves the
-        // slider's old polarity.
-        int sensitivity = 100 - (g_micThr * 90) / 30;
-        onsetDet.set_sensitivity(sensitivity);
-
-        auto sres = silenceDet.update(latestEnergies.mid + latestEnergies.high, now);
-        if (sres.is_below_gate) {
-            agcBass.suspend(); agcMid.suspend(); agcHigh.suspend(); agcAmp.suspend();
-        }
-
-        float scaledBands[16];
-        for (int i = 0; i < 16; i++) scaledBands[i] = latestEnergies.bands[i] * kRawScale;
-        float smoothBass = agcBass.process(latestEnergies.bass * kRawScale);
-        agcMid.process(latestEnergies.mid * kRawScale);
-        agcHigh.process(latestEnergies.high * kRawScale);
-        agcAmp.process(latestEnergies.amplitude * kRawScale);
-
-        audio_dsp::OnsetDetector::OnsetResult onsetResult{false, 0.0f};
-        if (!sres.is_below_gate) {
-            onsetResult = onsetDet.update(scaledBands, smoothBass, now, -1.0f);
-        }
-
-        // Explicit noise gate — same formula as before (log mapping: slider
-        // 1-50 -> ~1e-6..1e-1), now applied to the rescaled flux value instead
-        // of raw kick-band energy.
-        float flux = onsetDet.last_onset_value() * kTeleFluxScale;
-        double gate = (g_micGate > 0) ? pow(10.0, (double)g_micGate / 10.0) * 1e-6 : 0.0;
-        if (onsetResult.detected && flux < gate) onsetResult.detected = false;
-
-        if (flux > g_tele_energy) g_tele_energy = flux;  // peak-hold until next push
-        g_tele_baseline  = onsetDet.mean() * kTeleFluxScale;
-        g_tele_threshold = onsetDet.threshold() * kTeleFluxScale;
-        g_tele_gate      = gate;
-        if (onsetResult.detected) {
-            g_tele_onset = 1; g_tele_det = g_tele_det + 1;  // 1=detected; upgraded to 2 if accepted
-            g_tele_dev = 999.f;                             // overwritten below if judged
-            g_tele_onsetMs = now;
-        }
-
-        // BTrack (fast path above) is the actual tempo source now — read its
-        // latest per-hop result, gated on its own silence-confidence
-        // threshold (matches the vendor's own gating philosophy rather than
-        // inventing a new one).
+        // BTrack (fast path above) is the actual tempo source — read its
+        // latest per-hop result, gated on the tunable lock-tier confidence.
         audio_dsp::BTrack::Result btResult = latestBTrackResult;
-        bool btConfident = btResult.confidence > audio_dsp::BTrack::kSilenceConfidence;
+        g_tele_conf  = btResult.confidence;
+        g_tele_level = frameLevelDb;
+        bool btConfident = btResult.confidence > g_micConfSil * 0.01f;
 
         if (btConfident && btResult.bpm >= 50.0f && btResult.bpm <= 220.0f) {
             g_mic_bpm = btResult.bpm;  // raw hint for display
         }
 
-        if (isAudio && g_mic_armed && onsetResult.detected && btConfident && btResult.bpm > 0.0f) {
-            // Judge acceptance against the STABLE tapped tempo, not the
-            // wandering output — otherwise a small drift makes the window
-            // admit one interval tail and reject the other, ratcheting away.
-            double anchor = (g_mic_tapAnchor > 0.0) ? g_mic_tapAnchor : g_mic_tracked;
+        // Absolute level floor: a beat whose hop sat below g_micFloor does
+        // not count for ANY tier — SuperFlux is level-relative, so without
+        // this a quiet room's keyboard clatter makes confident "beats".
+        bool btBeatThisPoll = btBeatSincePoll && (beatLevelDb >= (float)g_micFloor);
+        btBeatSincePoll = false;  // consumed this poll, regardless of outcome below
 
-            // Cheap safety-net octave fold: BTrack's own harmonic-template +
-            // leaky-integrator tempo induction already does the heavy
-            // disambiguation, this just guards the rare case its candidate
-            // lands an octave away from what the operator tapped.
+        // FOLLOW/HOLD: BTrack's confidence gates the tempo outright — no
+        // acceptance window, no slew. FOLLOW (high-confidence beat): snap
+        // the tracked tempo TO the candidate so it converges as fast as
+        // BTrack does; the deadband only swallows sub-0.4-BPM jitter so the
+        // published Link tempo doesn't flicker across the network (and since
+        // every real move lands exactly ON the candidate, there is no
+        // standing offset for the PLL to absorb). HOLD (anything less):
+        // the tempo freezes at its last good value through silence,
+        // breakdowns, and low-confidence passages — beats above the silence
+        // floor still feed the lock and PLL below, they just can't MOVE it.
+        if (isAudio && g_mic_armed && btBeatThisPoll && btConfident && btResult.bpm > 0.0f) {
+            // Fold octave errors toward the STABLE tapped tempo, not the
+            // wandering output — the anchor is ground truth for which octave
+            // the operator meant (the ~85-160 BPM aliasing limit in
+            // tempo_estimator.h is why this stays).
+            double anchor = (g_mic_tapAnchor > 0.0) ? g_mic_tapAnchor : g_mic_tracked;
             double cand = btResult.bpm;
             while (cand > anchor * 1.4) cand *= 0.5;
             while (cand < anchor * 0.7) cand *= 2.0;
-            g_tele_dev = (float)(cand - anchor);  // telemetry: the exact judged quantity, BPM units
 
-            if (fabs(cand - anchor) <= (double)g_micWin) {
+            // Counters: det = beats seen (cleared floor + lock tier),
+            // acc = beats that cleared the move tier and could move tempo.
+            g_tele_det = g_tele_det + 1;
+            g_tele_onset = 1;         // lock-tier beat (chart: dim tick)
+            g_tele_onsetMs = beatMs;  // beat hop's real time, for tick placement
+
+            if (btResult.confidence > g_micConfMove * 0.01f) {
                 g_tele_acc = g_tele_acc + 1;
-                g_tele_onset = 2;  // this beat passed the accept test
-
-                // Deadband: once trk is within ~0.4 BPM of the target, freeze it
-                // so the displayed tempo stops flickering. Genuine drift beyond
-                // the band still moves it, slew-limited (0.1%/sec).
-                double delta = cand - g_mic_tracked;
-                if (fabs(delta) > 0.4) {
-                    double dt      = (lastApply ? (now - lastApply) : 500) / 1000.0;
-                    double maxStep = (double)g_micSlew * 0.001 * g_mic_tracked * dt;
-                    if (delta >  maxStep) delta =  maxStep;
-                    if (delta < -maxStep) delta = -maxStep;
-                    g_mic_tracked += delta;
-                }
+                g_tele_onset = 2;     // move-tier beat (chart: bright tick)
+                if (fabs(cand - g_mic_tracked) > 0.4) g_mic_tracked = cand;
                 // Clamp ±20% of the tapped tempo (octave/subharmonic guard)
                 double lo = anchor * 0.80, hi = anchor * 1.20;
                 if (g_mic_tracked < lo) g_mic_tracked = lo;
                 if (g_mic_tracked > hi) g_mic_tracked = hi;
-                lastApply = now;
-                lastOnset = now;  // last ACCEPTED beat — drives the lock-timeout below
-                if (++consec >= 4) {
-                    if (!g_mic_locked) ws_log("Locked at %.1f BPM", g_mic_tracked);
-                    g_mic_locked = true;
-                }
-
-                if (linkEnabled) {
-                    uint64_t t = now_us();
-                    abl_link_capture_app_session_state(s_link, mic_sess);
-                    abl_link_set_tempo(mic_sess, g_mic_tracked, t);
-                    // Phase-lock (only once locked): gently pull the grid so
-                    // the detected kick lands on the NEAREST beat. Nearest-beat
-                    // correction preserves the tapped bar/downbeat.
-                    if (g_mic_locked) {
-                        double beat    = abl_link_beat_at_time(mic_sess, t, linkQuantum);
-                        double nearest = floor(beat + 0.5);
-                        double fixed   = beat + 0.15 * (nearest - beat);  // low gain
-                        abl_link_force_beat_at_time(mic_sess, fixed, t, linkQuantum);
-                    }
-                    abl_link_commit_app_session_state(s_link, mic_sess);
-                }
             }
-            // No consec reset on a windowed-out value → lock stays sticky
+            lastOnset = now;  // last CONFIDENT beat — drives the lock-timeout below
+            if (++consec >= 4) {
+                if (!g_mic_locked) ws_log("Locked at %.1f BPM", g_mic_tracked);
+                g_mic_locked = true;
+            }
+
+            if (linkEnabled) {
+                uint64_t t = now_us();
+                abl_link_capture_app_session_state(s_link, mic_sess);
+                abl_link_set_tempo(mic_sess, g_mic_tracked, t);
+                // Phase-lock (only once locked): gently pull the grid so
+                // the detected beat lands on the NEAREST beat. Nearest-beat
+                // correction preserves the tapped bar/downbeat.
+                if (g_mic_locked) {
+                    double beat    = abl_link_beat_at_time(mic_sess, t, linkQuantum);
+                    double nearest = floor(beat + 0.5);
+                    double fixed   = beat + 0.15 * (nearest - beat);  // low gain
+                    abl_link_force_beat_at_time(mic_sess, fixed, t, linkQuantum);
+                }
+                abl_link_commit_app_session_state(s_link, mic_sess);
+            }
         }
 
-        // Drop the lock if no ACCEPTED beat (lastOnset, set only on acceptance
-        // above) has reinforced it recently — raw detections that never pass
-        // the accept window must not keep the lock alive. Hold = 6 beat-periods
+        // Drop the lock if no CONFIDENT beat (lastOnset, set only above) has
+        // reinforced it recently. Hold = 6 beat-periods
         // (min 3.5s) so slow tempos get the same tolerance in musical time.
         uint32_t lockHold = (g_mic_tracked > 60.0)
                           ? (uint32_t)(6.0 * 60000.0 / g_mic_tracked) : 6000;
@@ -2314,8 +2254,8 @@ static void mic_task(void *) {
         // Tuning telemetry while in Audio mode
         if (isAudio && (now - lastDbg) >= 500) {
             lastDbg = now;
-            printf("mic flux=%.3e mean=%.3e thr=%.3e gate=%.3e raw=%.1f trk=%.1f conf=%.2f armed=%d lock=%d\n",
-                   (double)flux, (double)g_tele_baseline, (double)g_tele_threshold, gate,
+            printf("mic lvl=%.1fdB floor=%ddB raw=%.1f trk=%.1f conf=%.2f armed=%d lock=%d\n",
+                   (double)frameLevelDb, g_micFloor,
                    (double)g_mic_bpm, (double)g_mic_tracked, (double)btResult.confidence,
                    g_mic_armed ? 1 : 0, g_mic_locked ? 1 : 0);
         }
