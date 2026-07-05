@@ -72,6 +72,7 @@ static constexpr uint8_t CH_u = 0x1C;
 static constexpr uint8_t CH_C    = 0x4E;  // segments A,D,E,F
 static constexpr uint8_t CH_F    = 0x47;  // segments A,E,F,G
 static constexpr uint8_t CH_J    = 0x38;  // segments B,C,D
+static constexpr uint8_t CH_y    = 0x3B;  // segments B,C,D,F,G
 
 // Mode indicator bars (single horizontal segment, see project memory for encoding)
 static constexpr uint8_t BAR_TOP = 0x40;  // segment A  → CDJ mode
@@ -383,7 +384,7 @@ static void menu_commit(int item, int val) {
 static const uint8_t kMenuLabels[MENU_COUNT][4] = {
     { CH_B, CH_e, CH_a, CH_t                                       },  // Beat
     { CH_L, CH_e, CH_d, MAX7219Display::SEG_BLANK                  },  // Led
-    { CH_n, CH_o, CH_d, CH_e                                       },  // node (mode)
+    { CH_S, CH_r, CH_C, MAX7219Display::SEG_BLANK                  },  // Src (input mode)
     { CH_L, CH_a, CH_n | MAX7219Display::SEG_DP, MAX7219Display::SEG_BLANK },  // Lan.
     { CH_A, CH_d, CH_d, CH_r                                               },  // Addr (current IP)
     { CH_r, CH_S, CH_e, CH_t                                       },  // rSet
@@ -517,14 +518,16 @@ static void update_display() {
 
     if (appMode == MODE_MENU_CONFIRM) {
         segs[0] = CH_r; segs[1] = CH_S; segs[2] = CH_e; segs[3] = CH_t;
-        segs[4] = CH_S; segs[5] = CH_u; segs[6] = CH_r; segs[7] = CH_e;
+        segs[4] = MAX7219Display::SEG_BLANK;
+        segs[5] = CH_y; segs[6] = CH_e; segs[7] = CH_S;
         display.setSegments(segs);
         return;
     }
 
     if (appMode == MODE_OTA_CONFIRM) {
         segs[0] = CH_u; segs[1] = CH_P; segs[2] = CH_d; segs[3] = MAX7219Display::SEG_BLANK;
-        segs[4] = CH_S; segs[5] = CH_u; segs[6] = CH_r; segs[7] = CH_e;
+        segs[4] = MAX7219Display::SEG_BLANK;
+        segs[5] = CH_y; segs[6] = CH_e; segs[7] = CH_S;
         display.setSegments(segs);
         return;
     }
@@ -865,6 +868,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         ".mbig{font-variant-numeric:tabular-nums}"
         ".mbig div{font-size:30px;font-weight:800;color:#B7F7A5;width:4.2ch;"
         "text-align:right;line-height:1}"
+        "#mrawv{color:#0af}"
         ".mbig span{display:block;color:#777;font-size:11px;text-transform:uppercase;"
         "letter-spacing:.05em;margin-top:2px}"
         "#mstate{display:inline-block;width:96px;text-align:center;padding:6px 0;"
@@ -1148,20 +1152,11 @@ static esp_err_t http_get_root(httpd_req_t *req) {
           "trace('r','#0af');"
           "trace('k','#B7F7A5');"
         "}"
-        // Dev hook: ?js=http://<pc-ip>:8000/tuning.js loads the chart code from an
-        // external server (docs/tuning.js) INSTEAD of starting the embedded copy —
-        // its later definitions shadow the ones above. Edit + F5, no reflash.
-        "var mExt=new URLSearchParams(location.search).get('js');"
-        "if(mExt){var _s=document.createElement('script');"
-          // Cache-buster: dynamically injected scripts dodge Ctrl+F5, and
-          // python http.server sends no Cache-Control — force a fresh fetch
-          "_s.src=mExt+(mExt.indexOf('?')<0?'?':'&')+'t='+Date.now();"
-          "document.body.appendChild(_s);}"
-        "else{mConnect();"
+        "mConnect();"
         "(function mAnim(){"
           "mDraw(mLastMsg?Math.min((performance.now()-mLastMsg)/50,1):0);"
           "requestAnimationFrame(mAnim);"
-        "})();}"
+        "})();"
         "</script></body></html>");
     httpd_resp_sendstr_chunk(req, nullptr);
     return ESP_OK;

@@ -18,14 +18,14 @@ tapbox is always on, always listening, and always in sync.
 
 tapbox uses an 8-digit display that shows you everything you need at a glance.
 
-![Display layout](docs/display.jpg)
+![Display layout](docs/display.png)
 
 Reading left to right:
 
 - **beat** — the current tempo in BPM (`120.0`), updated in real time when any device in the Link session adjusts it
 - **count** — which beat of the bar you are on right now (advances with the music)
-- **lock dot** — the decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio mode listening but not yet stable; **off** = no lock
-- **mode bar** — a single horizontal segment just after the count digit shows which sync mode is active: **top = CDJ**, **middle = Manual**, **bottom = Audio**
+- **lock dot** — the decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio source listening but not yet stable; **off** = no lock
+- **source bar** — a single horizontal segment just after the count digit shows which sync source is active: **top = CDJ**, **middle = Manual**, **bottom = Audio**
 - **peers** — how many other Ableton Link peers are connected to the session
 
 On startup, tapbox joins the existing Link session tempo if one is already running, otherwise it starts at 120 BPM. You can tap a new tempo whenever you are ready.
@@ -50,9 +50,9 @@ After you are locked in, any further taps continue to refine the tempo. tapbox c
 
 ---
 
-## Sync Modes
+## Sync Sources
 
-tapbox can get its tempo three different ways. You pick one with the `node` menu item, and the active mode is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio).
+tapbox can get its tempo three different ways. You pick one with the <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> menu item, and the active source is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio).
 
 ### Manual (`tAP`)
 
@@ -64,12 +64,12 @@ A small microphone listens to the room and works out the tempo for you, while **
 
 How to use it:
 
-1. Switch `node` to `Aud`. The bottom bar lights up. Nothing happens to the tempo yet — the mic is just listening.
+1. Switch <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> to `Aud`. The bottom bar lights up. Nothing happens to the tempo yet — the mic is just listening.
 2. Play the music near the microphone.
 3. **Tap once on the beat** to accept the detected tempo and set the downbeat to that moment — or **tap four times** if you want to set the tempo yourself and let the mic refine it from there.
 4. The beat digit's decimal point **blinks** while the mic is searching for a stable lock, then goes **solid** once locked. From then on the tempo tracks the music automatically; a single tap any time re-aligns the downbeat without changing the tempo.
 
-The detector analyzes the full spectrum via an FFT/mel-filterbank pipeline rather than a single frequency band, so it isn't limited to a specific kick sound, and the tempo tracking itself needs no tuning — the web config page's BPM tuning tab carries only a live diagnostic chart and its two display-tuning sliders. See the technical write-up in `BEAT_DETECTION.md` for how it works.
+The detector analyzes the full spectrum via an FFT/mel-filterbank pipeline rather than a single frequency band, so it isn't limited to a specific kick sound. The web config page's BPM tuning tab carries a live diagnostic chart plus three sliders that tune the detector's sensitivity to your mic and room — see **Audio Tuning** below, and the technical write-up in `BEAT_DETECTION.md` for how it works.
 
 ### CDJ (`Cdj`)
 
@@ -100,7 +100,7 @@ tapbox can connect to your WiFi network and run Ableton Link over it. This is us
 5. Enter your WiFi network name (SSID) and password. The SSID field is case-sensitive — copy it exactly from your phone's WiFi list.
 6. Tap **Save Network — tapbox will reboot**. The device saves the credentials and reboots, then connects to your network as a WiFi client and scrolls `StA` followed by the assigned IP address.
 
-The PIN is derived from the device's own hardware, so it's fixed for the life of that unit and never needs to be written down — it follows the IP address on the display at every boot or reconnect, in any mode (Ethernet, WiFi, or AP), and is always available from the `Addr` item in the menu.
+The PIN is derived from the device's own hardware, so it's fixed for the life of that unit and never needs to be written down — it follows the IP address on the display at every boot or reconnect, in any mode (Ethernet, WiFi, or AP), and is always available from the <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> item in the menu.
 
 > **What the PIN is for:** it exists to stop someone at a gig or in an office from wandering up to tapbox and casually changing your settings — it is not intended as strong security. Anyone determined enough to take the firmware apart could work out how the PIN is derived. Don't rely on it to protect anything beyond "keep the unsuspecting public out."
 
@@ -117,11 +117,11 @@ tapbox switches interfaces automatically without a reboot:
 
 If WiFi credentials fail to connect, tapbox falls back to AP mode immediately so you can reconfigure without rebooting.
 
-By default tapbox uses DHCP. If you need a fixed address, set `Lan.` to `Stat` on the device and enter the IP/subnet/gateway on the web config page (see below) — this applies to whichever interface, Ethernet or WiFi, is actually active.
+By default tapbox uses DHCP. If you need a fixed address, set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to `Stat` on the device and enter the IP/subnet/gateway on the web config page (see below) — this applies to whichever interface, Ethernet or WiFi, is actually active.
 
 ### Web Configuration Page
 
-The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via `Addr` in the menu). This applies every time, in every mode, since the page can change any setting on the device. The page is organized into four tabs — Network, Settings, and BPM tuning each have their own save button; the Log tab is view-only. Fields that don't apply to your current settings are greyed out rather than hidden, so the layout stays consistent.
+The config page is available at the device's IP address on port 80, from any browser over Ethernet or WiFi. Your browser will prompt for a username and password — enter `tapbox` and the 8-digit PIN that follows the IP address on the display (or via <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> in the menu). This applies every time, in every mode, since the page can change any setting on the device. The page is organized into four tabs — Network, Settings, and BPM tuning each have their own save button; the Log tab is view-only. Fields that don't apply to your current settings are greyed out rather than hidden, so the layout stays consistent.
 
 ![Network tab](docs/tapbox_web_config_network.png)
 
@@ -129,13 +129,11 @@ The config page is available at the device's IP address on port 80, from any bro
 
 ![Settings tab](docs/tapbox_web_config_settings.png)
 
-**Settings** (time signature, sync mode, brightness) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
+**Settings** (time signature, sync source, brightness) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
 
 ![BPM tuning tab](docs/tapbox_web_config_BPM_tuner.png)
 
-*(screenshot predates the current tuning parameters and the Log tab — due for a retake)*
-
-**BPM tuning** — microphone beat-detector parameters plus a live chart of the microphone signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever Sync mode isn't set to Audio, since these settings only affect audio detection.
+**BPM tuning** — microphone beat-detector parameters plus a live chart of the microphone signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever Sync source isn't set to Audio, since these settings only affect audio detection.
 
 **Log** — a fourth, view-only tab: a live scrolling log of tap/arm/lock events, timestamped, useful for testing without a serial cable attached (e.g. watching tempo-tracking behavior while changing pitch/speed in DJ software). Only active while the tab is open in a browser — see `BEAT_DETECTION.md` for what's logged.
 
@@ -144,6 +142,10 @@ The config page is available at the device's IP address on port 80, from any bro
 ## The Settings Menu
 
 Press the select button to open the menu. Press the tap button to move between items. Press the select button to enter edit mode for the selected item, then press the tap button to change the value (hold for fast auto-increment). Press select again to confirm and return to the menu.
+
+![Menu mode example: Beat label with value 4](docs/display_menu_mode.png)
+
+Each menu screen shows a 4-character label on the left, then the current value right-justified on the right — for example, <img src="docs/menu_glyph_beat.png" alt="Beat" height="26" valign="middle"> with a time signature of `4`.
 
 To go back from an edit, hold the select button for one second. To exit the menu entirely, hold select or wait six seconds — tapbox returns to normal mode without saving the current edit. When you next open the menu it returns to the last item you were on.
 
@@ -173,7 +175,7 @@ The display gives you a live preview as you change the value. In a dark venue, l
 
 ---
 
-### node — Sync Mode
+### Src — Sync Source
 
 **What it does:** selects where tapbox gets its tempo. Three values:
 
@@ -181,9 +183,9 @@ The display gives you a live preview as you change the value. In a dark venue, l
 - **`Aud`** — audio beat detection from the microphone (you tap the downbeat)
 - **`tAP`** — manual tap tempo
 
-The active mode is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio). See the **Sync Modes** section earlier in this manual for how each one works in practice.
+The active source is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio). See the **Sync Sources** section earlier in this manual for how each one works in practice.
 
-**About CDJ mode:** when set to `Cdj`, tapbox listens on the same Ethernet switch as your CDJ players and reads their beat timing automatically. The active CDJ's BPM is fed directly into the Ableton Link session — all your Link peers follow the CDJ without any tapping. A `C` indicator confirms the lock. tapbox follows the lowest player number (1 → 2 → 3 → 4); if that player stops for more than two seconds it drops to the next. While a CDJ is actively driving the tempo, the tap button is ignored — the CDJ is in control. If no CDJ is present, CDJ mode behaves like manual tap tempo.
+**About CDJ source:** when set to `Cdj`, tapbox listens on the same Ethernet switch as your CDJ players and reads their beat timing automatically. The active CDJ's BPM is fed directly into the Ableton Link session — all your Link peers follow the CDJ without any tapping. A `C` indicator confirms the lock. tapbox follows the lowest player number (1 → 2 → 3 → 4); if that player stops for more than two seconds it drops to the next. While a CDJ is actively driving the tempo, the tap button is ignored — the CDJ is in control. If no CDJ is present, CDJ source behaves like manual tap tempo.
 
 > CDJ sync requires Ethernet, on the same wired switch as the players. Nothing is installed on the CDJs — tapbox listens passively.
 
@@ -193,22 +195,21 @@ The active mode is shown by a bar on the display (top = CDJ, middle = Manual, bo
 
 ### Audio Tuning
 
-The microphone beat-detector runs an FFT/mel-filterbank onset detector feeding a dynamic-programming beat tracker (`BTrack`) — see `BEAT_DETECTION.md` for the full pipeline. The tempo tracking itself needs **no tuning**: while `BTrack` is highly confident, the tempo follows its estimate directly (so it responds to a pitch ride within a couple of beats); when confidence drops — silence, a breakdown, a beat-free passage — the tempo holds its last good value until confident beats return. Your tapped tempo still anchors which octave the tracker means, and the tempo can never leave ±20% of what you tapped without a re-tap.
+The microphone beat-detector runs an FFT/mel-filterbank onset detector feeding a dynamic-programming beat tracker (`BTrack`) — see `BEAT_DETECTION.md` for the full pipeline. While `BTrack` is confident, the tempo follows its estimate directly (so it responds to a pitch ride within a couple of beats); when confidence drops — silence, a breakdown, a beat-free passage — the tempo holds its last good value until confident beats return. Your tapped tempo still anchors which octave the tracker means, and the tempo can never leave ±20% of what you tapped without a re-tap.
 
-Two parameters remain on the **web config page**'s BPM tuning tab, and both affect only the live chart's own onset detector (the display, not the tempo):
+What counts as "confident enough," and how loud a sound has to be to count as a beat at all, both vary with your mic and your room — so three parameters on the **web config page**'s BPM tuning tab control them directly:
 
-- **Onset threshold**: sensitivity of the tuning-chart's onset detector — how much a spectral change must stand out to count. Higher rejects more false hits.
-- **Noise gate** (0–50): an absolute floor for the tuning-chart's onset detector. The scale is logarithmic — low values sit just above room silence, high values reach loud-venue levels — so each step matters more as you go up.
+- **Level floor** (dB, off by default): an absolute loudness floor. Without it, a completely silent room can still produce confident "beats" from something as quiet as keyboard typing, because the detector measures *relative* spectral change, not loudness. Watch the **Level** readout under the chart while music plays and while the room is quiet, then set the floor between the two.
+- **Lock confidence** (0.00–1.00, default 0.30): how confident `BTrack` must be for a beat to keep the sync **lock** alive and keep the beat grid phase-aligned. Lower this if the "LOCKED" state keeps dropping out on a quiet or reverberant mic signal.
+- **Move confidence** (0.00–1.00, default 0.60): how confident `BTrack` must be before a beat is allowed to actually **change** the tempo. Higher is more cautious — a beat-free passage or ambient noise won't be able to nudge the tempo unless it clears this bar. Lower it if the tempo isn't updating even though the **Measured BPM** readout looks correct.
 
-These tune the **chart's own onset detector** — a simpler, separate signal kept specifically to drive this live display. The actual tempo-tracking algorithm (`BTrack`) does its own onset detection and confidence gating internally, with no exposed tuning knobs.
+Watch the live chart while you adjust these: the top strip shows measured vs. Link BPM around your tapped tempo; the bottom strip shows the confidence trace against the lock/move lines (which move as you drag the sliders), with a tick for every beat — bright green if it moved the tempo, dim grey if it only held the lock. A cluster of bright ticks with no music playing means Move confidence needs to come up, or Level floor needs to come up to reject the noise outright.
 
-Above the chart, a live readout shows the **measured BPM** (raw, from `BTrack`, only updates while its confidence is high enough to trust), the **Link BPM** (the smoothed tempo actually driving the session), and the tracking state (idle / searching / locked).
-
-The web page shows a **live chart** of the tuning-detector's signal while you adjust these — the blue trace is the incoming energy, the orange dashed line is the onset threshold, the red dashed line is the noise gate, and green dots mark each detected beat. The vertical scale is fixed and logarithmic (never rescales, so a single loud transient can't throw off your reading), which conveniently means the noise gate line moves in a straight line with its slider. Drag the sliders and watch the trace cross the lines in real time, rather than guessing a number and listening afterward. Each slider applies immediately, live — there's no separate save step for these while tuning.
+Above the chart, a live readout shows the **measured BPM** (raw, from `BTrack`, only updates while its confidence clears the lock tier), the **Link BPM** (the tempo actually driving the session), and the tracking state (idle / searching / locked). Each slider applies immediately, live — there's no separate save step while tuning.
 
 For a real-time view of tap/lock events without a serial cable — useful when testing tempo tracking against something like a DJ pitch fader — see the **Log** tab described above.
 
-Below the chart, a rolling 10-second count shows **beats detected vs accepted**. Detected-but-not-accepted beats were outside the accept window — a high detect count with a low accept count means the detector hears rhythm that disagrees with the current tempo (wrong tempo anchor, or spurious hits).
+Below the chart, a rolling 10-second count shows **beats seen vs beats that moved the tempo**. Seen-but-didn't-move beats cleared the level floor and lock confidence but not move confidence — a high seen count with a low moved count usually means Move confidence is set too high for the current room, or the passage is genuinely ambiguous (a breakdown, sparse content).
 
 The defaults work for typical four-on-the-floor material. For the full explanation of what each does and how to dial them in, see `BEAT_DETECTION.md`.
 
@@ -226,17 +227,9 @@ The defaults work for typical four-on-the-floor material. For the full explanati
 
 When you confirm a change to this setting, tapbox displays `bOOt` and restarts automatically.
 
+The static IP, subnet mask, and gateway themselves are entered on the **web config page** — see **Web Configuration Page** above — and only take effect when <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> is set to **Stat**. Factory defaults: **192.168.1.200** / **255.255.255.0** / **192.168.1.1**.
+
 *Default: Auto*
-
----
-
-### IP, Sub., Hub. — Static Network Address
-
-The static IP, subnet mask, and gateway are entered on the **web config page** — see **Web Configuration Page** above. They only take effect when `Lan.` is set to **Stat**, and apply to whichever interface (Ethernet or WiFi) is active.
-
-Factory defaults: **192.168.1.200** / **255.255.255.0** / **192.168.1.1**.
-
----
 
 ---
 
@@ -260,11 +253,11 @@ Both system functions are activated from **within the menu** by holding both but
 
 ### OTA Firmware Update
 
-Open the menu, then hold both the **tap button** and the **select button** for **3 seconds**. The display shows `UPd.----`. Release both buttons — the display changes to `UPd SurE`.
+Open the menu, then hold both the **tap button** and the **select button** for **3 seconds**. The display shows <img src="docs/confirm_ota_hold.png" alt="UPd.----" height="26" valign="middle">. Release both buttons — the display changes to <img src="docs/confirm_ota_confirm.png" alt="UPd Yes" height="26" valign="middle">.
 
-Press **select** to confirm. tapbox saves a pending-update flag to memory, erases OTA data if necessary to return to the factory slot, and reboots. On the next boot, as soon as it obtains a network connection (Ethernet or WiFi), it downloads and installs the latest firmware automatically. The display shows `UPd.` followed by a progress percentage. When the percentage reaches 100, it shows `donE` and reboots into the new firmware.
+Press **select** to confirm. tapbox saves a pending-update flag to memory, erases OTA data if necessary to return to the factory slot, and reboots. On the next boot, as soon as it obtains a network connection (Ethernet or WiFi), it downloads and installs the latest firmware automatically. The display shows `UPd.` followed by a progress percentage. When the percentage reaches 100, it shows <img src="docs/confirm_ota_done.png" alt="UPd. done" height="26" valign="middle"> and reboots into the new firmware.
 
-If the download fails or the server is unreachable, the display shows `Er` and tapbox continues to boot normally. All settings are preserved across updates; only the firmware changes.
+If the download fails or the server is unreachable, the display shows <img src="docs/confirm_ota_err.png" alt="UPd.   Er" height="26" valign="middle"> and tapbox continues to boot normally. All settings are preserved across updates; only the firmware changes.
 
 To cancel: press **tap**, hold **select** for 1 second, or wait 6 seconds — tapbox returns to normal without scheduling an update.
 
@@ -272,9 +265,9 @@ To cancel: press **tap**, hold **select** for 1 second, or wait 6 seconds — ta
 
 ### Factory Reset
 
-Open the menu, then hold both the **tap button** and the **select button** for **8 seconds**. You will see `UPd.----` at 3 seconds and then `rSEt SurE` at 8 seconds. Release the buttons.
+Open the menu, then hold both the **tap button** and the **select button** for **8 seconds**. You will see <img src="docs/confirm_ota_hold.png" alt="UPd.----" height="26" valign="middle"> at 3 seconds and then <img src="docs/confirm_reset_confirm.png" alt="rSet Yes" height="26" valign="middle"> at 8 seconds. Release the buttons.
 
-Press **select** to confirm. tapbox resets all settings to factory defaults — sync mode to Audio, time signature to 4, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
+Press **select** to confirm. tapbox resets all settings to factory defaults — sync source to Audio, time signature to 4, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
 
 To cancel: press nothing (or press tap). The display returns to normal after 6 seconds without resetting anything.
 
@@ -301,7 +294,7 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 - Use `/downbeat` at the top of a new section to re-align the beat grid after a break.
 - Assign `/nudge 40` and `/nudge -40` to fader buttons on a mixing desk for a decisive push/pull, or `/nudge 5` / `/nudge -5` for fine phase correction.
 
-**Nudge notes:** a nudge shifts the shared Link timeline itself, so every connected app sees its beat grid move — it's not local to tapbox. In **Audio mode while locked**, the microphone owns phase alignment: its phase-lock will pull the grid back onto the detected beats within a few beats, undoing the nudge. Nudge is therefore most useful in CDJ and Manual modes; in Audio mode, re-tap the downbeat instead.
+**Nudge notes:** a nudge shifts the shared Link timeline itself, so every connected app sees its beat grid move — it's not local to tapbox. In **Audio source while locked**, the microphone owns phase alignment: its phase-lock will pull the grid back onto the detected beats within a few beats, undoing the nudge. Nudge is therefore most useful with the CDJ and Manual sources; with Audio, re-tap the downbeat instead.
 
 ---
 
@@ -375,7 +368,7 @@ Confirm the IP address on the display at next boot and update your OSC destinati
 Use the factory reset (open the menu, hold both buttons 8 s, then confirm with select) to return to Auto DHCP. The display will show the assigned address at the next boot.
 
 **The display is very dim after a restart.**
-tapbox detected a brownout (power dip) during the previous session and has automatically set brightness to level 1 to protect against a repeat. You can raise it in the menu under `Led` and save. If it keeps happening, check your power supply.
+tapbox detected a brownout (power dip) during the previous session and has automatically set brightness to level 1 to protect against a repeat. You can raise it in the menu under <img src="docs/menu_glyph_led.png" alt="Led" height="26" valign="middle"> and save. If it keeps happening, check your power supply.
 
 **The tempo drifts slightly after many taps.**  
 tapbox calculates BPM as an average across all taps in the session. Small variations in tap timing do shift the average, though the effect becomes smaller with each additional tap. For a locked-in tempo, tap steadily for 8 or more beats, then stop and let Link hold the tempo.

@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tapbox Display Designer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #16181c;
+    --panel: #1e2126;
+    --border: #2c3038;
+    --text: #d8dadf;
+    --muted: #8a8f98;
+    --accent: #ff6a4d;
+    --segOn: #b62b2b;
+    --segOff:#222;
+    --segBg: #000;
+    --gap: 0.25px;
+    --labelColor: #eaeaea;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 -apple-system, Segoe UI, Roboto, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+  .stage {
+    position: relative;
+    background: var(--segBg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    display: inline-block;
+    margin-bottom: 18px;
+  }
+  /* Annotation labels/arrows overflow above/below .stage's own box (they're
+     absolutely positioned, not part of layout) — reserve real margin so they
+     don't overlap the paragraph above or the panel below. */
+  .stage.anno-space { margin: 110px 0 110px 0; }
+  #annoOverlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+  #annoOverlay .anno-label {
+    position: absolute; transform: translateX(-50%);
+    color: var(--labelColor); font: bold 17px -apple-system, Segoe UI, sans-serif;
+    white-space: nowrap;
+  }
+  #annoOverlay .anno-line-v { position: absolute; width: 2px; background: var(--accent); }
+  #annoOverlay .anno-line-h { position: absolute; height: 2px; background: var(--accent); }
+  #annoOverlay .anno-arrow {
+    position: absolute; width: 0; height: 0; transform: translateX(-50%);
+    border-left: 5px solid transparent; border-right: 5px solid transparent;
+  }
+  #annoOverlay .anno-arrow.down { border-top: 7px solid var(--accent); }
+  #annoOverlay .anno-arrow.up { border-bottom: 7px solid var(--accent); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+  .row:last-child { margin-bottom: 0; }
+  input[type=text], select {
+    background: #101317; border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 6px 8px; font-size: 13px;
+  }
+  button {
+    background: #2a2e35; border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { background: #33383f; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1a0d08; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  label.chk { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; }
+  label.colorField { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 13px; }
+  input[type=color] {
+    width: 34px; height: 28px; padding: 2px; background: #101317;
+    border: 1px solid var(--border); border-radius: 5px; cursor: pointer;
+  }
+
+  .digit {
+    height: 40px;
+    stroke: var(--segBg);
+    stroke-width: var(--gap);
+    fill: var(--segOff);
+  }
+  .digit path, .digit circle { cursor: pointer; }
+  .digit .on { fill: var(--segOn); }
+  .digit.selected { outline: 2px solid var(--accent); border-radius: 4px; }
+
+  .digits-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 8px;
+  }
+  .digit-card {
+    background: #101317; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px; display: flex; flex-direction: column; gap: 5px;
+  }
+  .digit-card .idx { color: var(--muted); font-size: 11px; text-align: center; }
+  .digit-card input[type=text] { width: 100%; text-align: center; font-family: monospace; }
+  .digit-card select { width: 100%; }
+  .digit-card input[type=text].label-in { font-family: inherit; text-align: left; }
+
+  textarea#codeOut {
+    width: 100%; min-height: 70px; background: #101317; color: #b7e6a8;
+    border: 1px solid var(--border); border-radius: 5px; font-family: monospace;
+    font-size: 12.5px; padding: 8px; resize: vertical;
+  }
+</style>
+</head>
+<body>
+
+<h1>tapbox Display Designer</h1>
+<p class="sub">Segment-accurate mock of the 8-digit MAX7219 display, matching <code>include/max7219.h</code> and the <code>CH_*</code> glyph table in <code>src/main.cpp</code>. Click segments to toggle, or use the controls below. Use it to author/preview <code>kMenuLabels</code>-style rows or to rebuild figures like <code>docs/display.jpg</code>.</p>
+
+<div class="stage">
+  <svg class="digit" xmlns="http://www.w3.org/2000/svg" viewbox="6 0 64 105">
+    <path id="a1" d="M 49 15 H 19 L 14 10 L 19 5 H 49 L 54 10 Z"></path>
+    <path id="b1" d="M 50 46 V 16 L 55 11 L 60 16 V 46 L 55 51 Z"></path> 
+    <path id="c1" d="M 50 88 V 58 L 55 53 L 60 58 V 88 L 55 93 Z"></path> 
+    <path id="d1" d="M 19 89 H 49 L 54 94 L 49 99 H 19 L 14 94 Z"></path> 
+    <path id="e1" d="M 18 58 V 88 L 13 93 L 8 88 V 58 L 13 53 Z"></path> 
+    <path id="f1" d="M 18 16 V 46 L 13 51 L 8 46 V 16 L 13 11 Z"></path> 
+    <path id="g1" d="M 49 57 H 19 L 14 52 L 19 47 H 49 L 54 52 Z"></path> 
+    <circle id="dp1" cx="64" cy="94" r="4.5"></circle>
+  </svg>
+  <svg class="digit" xmlns="http://www.w3.org/2000/svg"  viewbox="6 0 64 105">
+    <path id="a2" d="M 49 15 H 19 L 14 10 L 19 5 H 49 L 54 10 Z"></path>
+    <path id="b2" d="M 50 46 V 16 L 55 11 L 60 16 V 46 L 55 51 Z"></path> 
+    <path id="c2" d="M 50 88 V 58 L 55 53 L 60 58 V 88 L 55 93 Z"></path> 
+    <path id="d2" d="M 19 89 H 49 L 54 94 L 49 99 H 19 L 14 94 Z"></path> 
+    <path id="e2" d="M 18 58 V 88 L 13 93 L 8 88 V 58 L 13 53 Z"></path> 
+    <path id="f2" d="M 18 16 V 46 L 13 51 L 8 46 V 16 L 13 11 Z"></path> 
+    <path id="g2" d="M 49 57 H 19 L 14 52 L 19 47 H 49 L 54 52 Z"></path> 
+    <circle id="dp2" cx="64" cy="94" r="4.5"></circle>
+  </svg>
+  <svg class="digit" xmlns="http://www.w3.org/2000/svg" viewbox="6 0 64 105">
+    <path id="a3" d="M 49 15 H 19 L 14 10 L 19 5 H 49 L 54 10 Z"></path>
+    <path id="b3" d="M 50 46 V 16 L 55 11 L 60 16 V 46 L 55 51 Z"></path> 
+    <path id="c3" d="M 50 88 V 58 L 55 53 L 60 58 V 88 L 55 93 Z"></path> 
+    <path id="d3" d="M 19 89 H 49 L 54 94 L 49 99 H 19 L 14 94 Z"></path> 
+    <path id="e3" d="M 18 58 V 88 L 13 93 L 8 88 V 58 L 13 53 Z"></path> 
+    <path id="f3" d="M 18 16 V 46 L 13 51 L 8 46 V 16 L 13 11 Z"></path> 
+    <path id="g3" d="M 49 57 H 19 L 14 52 L 19 47 H 49 L 54 52 Z"></path> 
+    <circle id="dp3" cx="64" cy="94" r="4.5"></circle>
+  </svg>
+  <svg class="digit" xmlns="http://www.w3.org/2000/svg" viewbox="6 0 64 105">
+    <path id="a4" d="M 49 15 H 19 L 14 10 L 19 5 H 49 L 54 10 Z"></path>
+    <path id="b4" d="M 50 46 V 16 L 55 11 L 60 16 V 46 L 55 51 Z"></path> 
+    <path id="c4" d="M 50 88 V 58 L 55 53 L 60 58 V 88 L 55 93 Z"></path> 
+    <path id="d4" d="M 19 89 H 49 L 54 94 L 49 99 H 19 L 14 94 Z"></path> 
+    <path id="e4" d="M 18 58 V 88 L 13 93 L 8 88 V 58 L 13 53 Z"></path> 
+    <path id="f4" d="M 18 16 V 46 L 13 51 L 8 46 V 16 L 13 11 Z"></path> 
+    <path id="g4" d="M 49 57 H 19 L 14 52 L 19 47 H 49 L 54 52 Z"></path> 
+    <circle id="dp4" cx="64" cy="94" r="4.5"></circle>
+  </svg>
+  <svg class="digit" xmlns="http://www.w3.org/2000/svg" viewbox="6 0 64 105">
+    <path id="a5" d="M 49 15 H 19 L 14 10 L 19 5 H 49 L 54 10 Z"></path>
+    <path id="b5" d="M 50 46 V 16 L 55 11 L 60 16 V 46 L 55 51 Z"></path> 
+    <path id="c5" d="M 50 88 V 58 L 55 53 L 60 58 V 88 L 55 93 Z"></path> 
+    <path id="d5" d="M 19 89 H 49 L 54 94 L 49 99 H 19 L 14 94 Z"></path> 
+    <path id="e5" d="M 18 58 V 88 L 13 93 L 8 88 V 58 L 13 53 Z"></path> 
+    <path id="f5" d="M 18 16 V 46 L 13 51 L 8 46 V 16 L 13 11 Z"></path> 
+    <path id="g5" d="M 49 57 H 19 L 14 52 L 19 47 H 49 L 54 52 Z"></path> 
+    <circle id="dp5" cx="64" cy="94" r="4.5"></circle>
+  </svg>
+  <svg class="digit" xmlns="http://www.w3.org/2000/svg" viewbox="6 0 64 105">
+    <path id="a6" d="M 49 15 H 19 L 14 10 L 19 5 H 49 L 54 10 Z"></path>
+    <path id="b6" d="M 50 46 V 16 L 55 11 L 60 16 V 46 L 55 51 Z"></path> 
+    <path id="c6" d="M 50 88 V 58 L 55 53 L 60 58 V 88 L 55 93 Z"></path> 
+    <path id="d6" d="M 19 89 H 49 L 54 94 L 49 99 H 19 L 14 94 Z"></path> 
+    <path id="e6" d="M 18 58 V 88 L 13 93 L 8 88 V 58 L 13 53 Z"></path> 
+    <path id="f6" d="M 18 16 V 46 L 13 51 L 8 46 V 16 L 13 11 Z"></path> 
+    <path id="g6" d="M 49 57 H 19 L 14 52 L 19 47 H 49 L 54 52 Z"></path> 
+    <circle id="dp6" cx="64" cy="94" r="4.5"></circle>
+  </svg>
+  <svg class="digit" xmlns="http://www.w3.org/2000/svg" viewbox="6 0 64 105">
+    <path id="a7" d="M 49 15 H 19 L 14 10 L 19 5 H 49 L 54 10 Z"></path>
+    <path id="b7" d="M 50 46 V 16 L 55 11 L 60 16 V 46 L 55 51 Z"></path> 
+    <path id="c7" d="M 50 88 V 58 L 55 53 L 60 58 V 88 L 55 93 Z"></path> 
+    <path id="d7" d="M 19 89 H 49 L 54 94 L 49 99 H 19 L 14 94 Z"></path> 
+    <path id="e7" d="M 18 58 V 88 L 13 93 L 8 88 V 58 L 13 53 Z"></path> 
+    <path id="f7" d="M 18 16 V 46 L 13 51 L 8 46 V 16 L 13 11 Z"></path> 
+    <path id="g7" d="M 49 57 H 19 L 14 52 L 19 47 H 49 L 54 52 Z"></path> 
+    <circle id="dp7" cx="64" cy="94" r="4.5"></circle>
+  </svg>
+  <svg class="digit" xmlns="http://www.w3.org/2000/svg" viewbox="6 0 64 105">
+    <path id="a8" d="M 49 15 H 19 L 14 10 L 19 5 H 49 L 54 10 Z"></path>
+    <path id="b8" d="M 50 46 V 16 L 55 11 L 60 16 V 46 L 55 51 Z"></path> 
+    <path id="c8" d="M 50 88 V 58 L 55 53 L 60 58 V 88 L 55 93 Z"></path> 
+    <path id="d8" d="M 19 89 H 49 L 54 94 L 49 99 H 19 L 14 94 Z"></path> 
+    <path id="e8" d="M 18 58 V 88 L 13 93 L 8 88 V 58 L 13 53 Z"></path> 
+    <path id="f8" d="M 18 16 V 46 L 13 51 L 8 46 V 16 L 13 11 Z"></path> 
+    <path id="g8" d="M 49 57 H 19 L 14 52 L 19 47 H 49 L 54 52 Z"></path> 
+    <circle id="dp8" cx="64" cy="94" r="4.5"></circle>
+  </svg>
+  <div id="annoOverlay"></div>
+</div>
+
+<div class="panel">
+  <h2>Quick text</h2>
+  <div class="row">
+    <input type="text" id="quickText" placeholder="e.g. bEAt or 121.4" maxlength="16" style="width:220px">
+    <button class="primary" id="applyText">Apply across 8 digits →</button>
+    <button id="clearAll">Clear all</button>
+    <span class="muted" style="color:var(--muted)">supports 0-9, a A b B C d e F h I J L n o P r S t u v, space (blank), - (dash), . (attaches to previous digit)</span>
+  </div>
+  <div class="row">
+    <button id="presetDisplayJpg">Load docs/display.jpg example</button>
+    <button id="presetBeat">Load "Beat" menu label</button>
+    <label class="chk"><input type="checkbox" id="showAnno" checked> Show annotation labels/arrows</label>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Appearance</h2>
+  <div class="row">
+    <label class="colorField">Background <input type="color" id="colorBg"></label>
+    <label class="colorField">Segment ON <input type="color" id="colorOn"></label>
+    <label class="colorField">Segment OFF <input type="color" id="colorOff"></label>
+    <label class="colorField">Label text <input type="color" id="colorLabel"></label>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Digits</h2>
+  <div class="digits-grid" id="digitsGrid"></div>
+</div>
+
+<div class="panel">
+  <h2>Export</h2>
+  <div class="row">
+    <button id="genCode">Copy as C++ array</button>
+    <select id="pngScale">
+      <option value="2">Download PNG @2x</option>
+      <option value="1">Download PNG @1x</option>
+      <option value="4">Download PNG @4x</option>
+    </select>
+    <button class="primary" id="downloadPng">Download</button>
+  </div>
+  <div class="row">
+    <textarea id="codeOut" readonly placeholder="Generated code appears here"></textarea>
+  </div>
+</div>
+
+<script>
+// ---- Segment bit layout, exactly mirroring include/max7219.h and src/main.cpp ----
+const SEG = { DP: 0x80, A: 0x40, B: 0x20, C: 0x10, D: 0x08, E: 0x04, F: 0x02, G: 0x01 };
+const SEG_BLANK = 0x00, SEG_DASH = 0x01;
+const DIGITS = [0x7E,0x30,0x6D,0x79,0x33,0x5B,0x5F,0x70,0x7F,0x7B];
+const CH = { a:0x7D, A:0x77, b:0x1F, B:0x7F, d:0x3D, e:0x6F, h:0x17, I:0x30, L:0x0E,
+             o:0x1D, n:0x15, P:0x67, r:0x05, S:0x5B, t:0x0F, u:0x1C, v:0x1C,
+             C:0x4E, F:0x47, J:0x38, y:0x3B };
+const BAR_TOP = 0x40, BAR_MID = 0x01, BAR_BOT = 0x08;
+
+const NAMED = { // byte (without DP) -> C++ literal, checked in this order
+  0x00: 'MAX7219Display::SEG_BLANK',
+  0x01: 'MAX7219Display::SEG_DASH',
+};
+DIGITS.forEach((v, n) => { if (!(v in NAMED)) NAMED[v] = `MAX7219Display::digit(${n})`; });
+Object.entries(CH).forEach(([k, v]) => { if (!(v in NAMED)) NAMED[v] = `CH_${k}`; });
+NAMED[BAR_TOP] = NAMED[BAR_TOP] || 'BAR_TOP';
+NAMED[BAR_MID] = NAMED[BAR_MID] || 'BAR_MID';
+NAMED[BAR_BOT] = NAMED[BAR_BOT] || 'BAR_BOT';
+
+// ---- state: the 8 segment bytes, which digit is selected for keyboard
+// editing, and optional above/below labels (2 rows each side, "1" nearer
+// the digit than "2", to keep overlapping labels apart). The digits
+// themselves are the hardcoded <svg class="digit"> markup in .stage —
+// render() only toggles an "on" class on their paths/circles; colors come
+// from the --segOn/--segOff/--segBg/--labelColor CSS vars. ----
+function blank8() { return ['','','','','','','','']; }
+const state = {
+  bytes: [0,0,0,0,0,0,0,0],
+  selected: null,
+  above1: blank8(), above2: blank8(),
+  below1: blank8(), below2: blank8(),
+  // Separate above/below dot-targeting: a digit's above-label (e.g. "count")
+  // and below-label (e.g. "lock") often need to point at different things
+  // (the digit body vs. its DP dot) even though they share a digit index.
+  dotTargetAbove: [false,false,false,false,false,false,false,false],
+  dotTargetBelow: [false,false,false,false,false,false,false,false],
+};
+
+function groupLabels(labels) {
+  const groups = [];
+  let i = 0;
+  while (i < 8) {
+    if (!labels[i]) { i++; continue; }
+    let j = i;
+    while (j + 1 < 8 && labels[j + 1] === labels[i]) j++;
+    groups.push({ text: labels[i], from: i, to: j });
+    i = j + 1;
+  }
+  return groups;
+}
+
+function charToByte(ch) {
+  if (ch >= '0' && ch <= '9') return DIGITS[ch.charCodeAt(0) - 48];
+  if (ch === ' ') return SEG_BLANK;
+  if (ch === '-' || ch === '_') return SEG_DASH;
+  if (ch in CH) return CH[ch];
+  const lower = ch.toLowerCase();
+  if (lower in CH) return CH[lower];
+  return null;
+}
+
+function applyQuickText(text) {
+  const bytes = [0,0,0,0,0,0,0,0];
+  let slot = 0;
+  for (const ch of text) {
+    if (slot >= 8) break;
+    if (ch === '.') {
+      if (slot > 0) bytes[slot - 1] |= SEG.DP;
+      continue;
+    }
+    const b = charToByte(ch);
+    bytes[slot] = (b === null) ? SEG_BLANK : b;
+    slot++;
+  }
+  state.bytes = bytes;
+  render();
+}
+
+const SEG_KEYS = ['A','B','C','D','E','F','G'];
+const digitSvgs = Array.from(document.querySelectorAll('svg.digit'));
+function segEl(i, key) { return document.getElementById(key.toLowerCase() + (i + 1)); }
+function dpEl(i) { return document.getElementById('dp' + (i + 1)); }
+
+function selectDigit(i) {
+  state.selected = i;
+  render();
+}
+
+// Click handlers attach once — the digit markup is static now, not rebuilt
+// every render like the old dynamically-generated SVG was.
+digitSvgs.forEach((svg, i) => {
+  svg.addEventListener('click', () => selectDigit(i));
+  for (const key of SEG_KEYS) {
+    segEl(i, key).addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      state.bytes[i] ^= SEG[key];
+      selectDigit(i);
+    });
+  }
+  dpEl(i).addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    state.bytes[i] ^= SEG.DP;
+    selectDigit(i);
+  });
+});
+
+function render() {
+  for (let i = 0; i < 8; i++) {
+    const byte = state.bytes[i];
+    for (const key of SEG_KEYS) {
+      segEl(i, key).classList.toggle('on', (byte & SEG[key]) !== 0);
+    }
+    dpEl(i).classList.toggle('on', (byte & SEG.DP) !== 0);
+    digitSvgs[i].classList.toggle('selected', state.selected === i);
+  }
+  renderControls();
+  updateOverlay();
+}
+
+// ---- Annotation geometry: computed once from *measured* element positions
+// (getBoundingClientRect), not hardcoded layout math, so it stays correct
+// regardless of how .stage lays the digits out. `ox`/`oy` translate from
+// viewport coordinates into whatever-origin the caller wants (the live
+// overlay uses .stage's origin; PNG export uses the export canvas's origin)
+// — this same geometry drives both the live HTML overlay and the export.
+function computeAnnotations(ox, oy) {
+  function digitCenterX(i) {
+    const r = digitSvgs[i].getBoundingClientRect();
+    return r.left + r.width / 2 - ox;
+  }
+  function dotCenterX(i) {
+    const r = dpEl(i).getBoundingClientRect();
+    return r.left + r.width / 2 - ox;
+  }
+  function arrowX(dotTargetArr, i) { return dotTargetArr[i] ? dotCenterX(i) : digitCenterX(i); }
+
+  const d0 = digitSvgs[0].getBoundingClientRect();
+  const edgeTop = d0.top - oy, edgeBot = d0.bottom - oy;
+
+  const labels = [], vlines = [], hlines = [], arrows = [];
+  const EDGE_GAP = 8, TEXT_H = 26;
+
+  function side(list, edgeY, dir, reach, dotTargetArr) {
+    const arrowY = edgeY + dir * EDGE_GAP;
+    const elbowY = edgeY + dir * reach;
+    const textTopY = dir > 0 ? elbowY : elbowY - TEXT_H;
+    for (const grp of groupLabels(list)) {
+      const leftX = arrowX(dotTargetArr, grp.from), rightX = arrowX(dotTargetArr, grp.to);
+      const cx = (leftX + rightX) / 2;
+      labels.push({ text: grp.text, x: cx, y: textTopY });
+      if (grp.from === grp.to) {
+        vlines.push({ x: cx, y1: elbowY, y2: arrowY });
+        arrows.push({ x: cx, y: arrowY, dir: dir > 0 ? 'up' : 'down' });
+      } else {
+        hlines.push({ x1: leftX, x2: rightX, y: elbowY });
+        vlines.push({ x: leftX, y1: elbowY, y2: arrowY });
+        vlines.push({ x: rightX, y1: elbowY, y2: arrowY });
+      }
+    }
+  }
+
+  side(state.above1, edgeTop, -1, 36, state.dotTargetAbove);
+  side(state.above2, edgeTop, -1, 84, state.dotTargetAbove);
+  side(state.below1, edgeBot, 1, 36, state.dotTargetBelow);
+  side(state.below2, edgeBot, 1, 84, state.dotTargetBelow);
+
+  return { labels, vlines, hlines, arrows };
+}
+
+function updateOverlay() {
+  const overlay = document.getElementById('annoOverlay');
+  const stage = document.querySelector('.stage');
+  const showAnno = document.getElementById('showAnno').checked;
+  stage.classList.toggle('anno-space', showAnno);
+  overlay.innerHTML = '';
+  if (!showAnno) return;
+  const stageRect = stage.getBoundingClientRect();
+  const anno = computeAnnotations(stageRect.left, stageRect.top);
+
+  function makeDiv(cls) {
+    const d = document.createElement('div');
+    d.className = cls;
+    overlay.appendChild(d);
+    return d;
+  }
+  for (const l of anno.vlines) {
+    const d = makeDiv('anno-line-v');
+    d.style.left = (l.x - 1) + 'px';
+    d.style.top = Math.min(l.y1, l.y2) + 'px';
+    d.style.height = Math.abs(l.y2 - l.y1) + 'px';
+  }
+  for (const l of anno.hlines) {
+    const d = makeDiv('anno-line-h');
+    d.style.left = Math.min(l.x1, l.x2) + 'px';
+    d.style.top = (l.y - 1) + 'px';
+    d.style.width = Math.abs(l.x2 - l.x1) + 'px';
+  }
+  for (const a of anno.arrows) {
+    const d = makeDiv('anno-arrow ' + a.dir);
+    d.style.left = a.x + 'px';
+    d.style.top = (a.dir === 'down' ? a.y - 7 : a.y) + 'px';
+  }
+  for (const l of anno.labels) {
+    const d = makeDiv('anno-label');
+    d.textContent = l.text;
+    d.style.left = l.x + 'px';
+    d.style.top = l.y + 'px';
+  }
+}
+
+function byteToHex(b) { return '0x' + b.toString(16).toUpperCase().padStart(2, '0'); }
+
+function renderControls() {
+  const grid = document.getElementById('digitsGrid');
+  if (grid.childElementCount !== 8) {
+    grid.innerHTML = '';
+    for (let i = 0; i < 8; i++) {
+      const card = document.createElement('div');
+      card.className = 'digit-card';
+      card.innerHTML = `
+        <div class="idx">#${i}</div>
+        <input type="text" class="hexIn" data-i="${i}" maxlength="4">
+        <select class="presetSel" data-i="${i}"></select>
+        <label class="chk"><input type="checkbox" class="dpChk" data-i="${i}"> DP</label>
+        <input type="text" class="label-in above2In" data-i="${i}" placeholder="above (far)">
+        <input type="text" class="label-in above1In" data-i="${i}" placeholder="above (near)">
+        <label class="chk"><input type="checkbox" class="dotTargetAboveChk" data-i="${i}"> above → dot</label>
+        <input type="text" class="label-in below1In" data-i="${i}" placeholder="below (near)">
+        <input type="text" class="label-in below2In" data-i="${i}" placeholder="below (far)">
+        <label class="chk"><input type="checkbox" class="dotTargetBelowChk" data-i="${i}"> below → dot</label>
+      `;
+      grid.appendChild(card);
+
+      const sel = card.querySelector('.presetSel');
+      const groups = {
+        'Digits': Array.from({length:10}, (_,n) => [String(n), DIGITS[n]]),
+        'Letters': Object.entries(CH),
+        'Special': [['blank', SEG_BLANK], ['dash', SEG_DASH],
+                    ['bar top (CDJ)', BAR_TOP], ['bar mid (Manual)', BAR_MID], ['bar bottom (Audio)', BAR_BOT]],
+      };
+      sel.innerHTML = '<option value="">— set —</option>' + Object.entries(groups).map(([label, items]) =>
+        `<optgroup label="${label}">` +
+        items.map(([name, val]) => `<option value="${val}">${name}</option>`).join('') +
+        '</optgroup>'
+      ).join('');
+      sel.addEventListener('change', () => {
+        if (sel.value === '') return;
+        const idx = +sel.dataset.i;
+        const dp = state.bytes[idx] & SEG.DP;
+        state.bytes[idx] = (+sel.value & 0x7F) | dp;
+        sel.value = '';
+        render();
+      });
+
+      card.querySelector('.hexIn').addEventListener('change', (ev) => {
+        const idx = +ev.target.dataset.i;
+        const v = parseInt(ev.target.value, 16);
+        state.bytes[idx] = isNaN(v) ? 0 : (v & 0xFF);
+        render();
+      });
+      card.querySelector('.dpChk').addEventListener('change', (ev) => {
+        const idx = +ev.target.dataset.i;
+        state.bytes[idx] = ev.target.checked ? (state.bytes[idx] | SEG.DP) : (state.bytes[idx] & ~SEG.DP);
+        render();
+      });
+      card.querySelector('.dotTargetAboveChk').addEventListener('change', (ev) => {
+        state.dotTargetAbove[+ev.target.dataset.i] = ev.target.checked;
+        render();
+      });
+      card.querySelector('.dotTargetBelowChk').addEventListener('change', (ev) => {
+        state.dotTargetBelow[+ev.target.dataset.i] = ev.target.checked;
+        render();
+      });
+      for (const field of ['above1', 'above2', 'below1', 'below2']) {
+        card.querySelector(`.${field}In`).addEventListener('input', (ev) => {
+          state[field][+ev.target.dataset.i] = ev.target.value;
+          render();
+        });
+      }
+    }
+  }
+  const hexIns = grid.querySelectorAll('.hexIn');
+  const dpChks = grid.querySelectorAll('.dpChk');
+  const dotTargetAboveChks = grid.querySelectorAll('.dotTargetAboveChk');
+  const dotTargetBelowChks = grid.querySelectorAll('.dotTargetBelowChk');
+  const labelIns = {
+    above1: grid.querySelectorAll('.above1In'), above2: grid.querySelectorAll('.above2In'),
+    below1: grid.querySelectorAll('.below1In'), below2: grid.querySelectorAll('.below2In'),
+  };
+  for (let i = 0; i < 8; i++) {
+    if (document.activeElement !== hexIns[i]) hexIns[i].value = byteToHex(state.bytes[i]);
+    dpChks[i].checked = (state.bytes[i] & SEG.DP) !== 0;
+    dotTargetAboveChks[i].checked = state.dotTargetAbove[i];
+    dotTargetBelowChks[i].checked = state.dotTargetBelow[i];
+    for (const field of ['above1', 'above2', 'below1', 'below2']) {
+      const input = labelIns[field][i];
+      if (document.activeElement !== input) input.value = state[field][i];
+    }
+  }
+}
+
+document.getElementById('applyText').addEventListener('click', () => {
+  applyQuickText(document.getElementById('quickText').value);
+});
+document.getElementById('quickText').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') applyQuickText(ev.target.value);
+});
+document.getElementById('clearAll').addEventListener('click', () => {
+  state.bytes = [0,0,0,0,0,0,0,0];
+  state.above1 = blank8(); state.above2 = blank8();
+  state.below1 = blank8(); state.below2 = blank8();
+  state.dotTargetAbove = [false,false,false,false,false,false,false,false];
+  state.dotTargetBelow = [false,false,false,false,false,false,false,false];
+  render();
+});
+document.getElementById('showAnno').addEventListener('change', render);
+
+document.getElementById('presetDisplayJpg').addEventListener('click', () => {
+  state.bytes = [
+    DIGITS[1], DIGITS[2], DIGITS[1] | SEG.DP, DIGITS[4],
+    SEG_BLANK, DIGITS[3] | SEG.DP, BAR_BOT, DIGITS[1],
+  ];
+  state.above1 = ['beat','beat','beat','beat','','count','',''];
+  state.above2 = blank8();
+  // "mode" staggered onto the far row so it doesn't collide horizontally
+  // with the adjacent "lock"/"peers" labels on the near row.
+  state.below1 = ['','','','','','lock','','peers'];
+  state.below2 = ['','','','','','','mode',''];
+  state.dotTargetAbove = [false,false,false,false,false,false,false,false];
+  state.dotTargetBelow = [false,false,false,false,false,true,false,false];
+  document.getElementById('showAnno').checked = true;
+  render();
+});
+document.getElementById('presetBeat').addEventListener('click', () => {
+  state.bytes = [CH.B, CH.e, CH.a, CH.t, 0, 0, 0, 0];
+  state.above1 = blank8(); state.above2 = blank8();
+  state.below1 = blank8(); state.below2 = blank8();
+  state.dotTargetAbove = [false,false,false,false,false,false,false,false];
+  state.dotTargetBelow = [false,false,false,false,false,false,false,false];
+  render();
+});
+
+document.getElementById('genCode').addEventListener('click', () => {
+  const parts = state.bytes.map(b => {
+    const dp = b & 0x80, base = b & 0x7F;
+    if (base in NAMED) return dp ? `${NAMED[base]} | MAX7219Display::SEG_DP` : NAMED[base];
+    return byteToHex(b);
+  });
+  const code = `{ ${parts.join(', ')} },`;
+  const out = document.getElementById('codeOut');
+  out.value = code;
+  out.select();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(code).catch(() => document.execCommand('copy'));
+  } else {
+    document.execCommand('copy');
+  }
+});
+
+// ---- PNG export: each digit is its own <svg> now, styled by CSS
+// classes/variables that won't resolve once cloned out to a detached,
+// serialized document — so each clone gets its *computed* colors baked in
+// as plain attributes first, then gets placed on the canvas at its actual
+// on-screen position/size (from getBoundingClientRect), so the exported
+// image matches the live layout exactly.
+// Draws the same annotation geometry computeAnnotations() feeds the live
+// HTML overlay, but as plain Canvas 2D calls — avoids any HTML/SVG-to-image
+// rasterization trickery, which is fragile and unnecessary for shapes this
+// simple.
+function drawAnnotationsToCanvas(ctx, anno, scale) {
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  const labelColor = getComputedStyle(document.documentElement).getPropertyValue('--labelColor').trim();
+
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 2 * scale;
+  for (const l of anno.vlines) {
+    ctx.beginPath();
+    ctx.moveTo(l.x * scale, l.y1 * scale);
+    ctx.lineTo(l.x * scale, l.y2 * scale);
+    ctx.stroke();
+  }
+  for (const l of anno.hlines) {
+    ctx.beginPath();
+    ctx.moveTo(l.x1 * scale, l.y * scale);
+    ctx.lineTo(l.x2 * scale, l.y * scale);
+    ctx.stroke();
+  }
+  ctx.fillStyle = accent;
+  for (const a of anno.arrows) {
+    const x = a.x * scale, y = a.y * scale, s = 5 * scale, h = 7 * scale;
+    ctx.beginPath();
+    if (a.dir === 'down') { ctx.moveTo(x - s, y - h); ctx.lineTo(x + s, y - h); ctx.lineTo(x, y); }
+    else { ctx.moveTo(x - s, y + h); ctx.lineTo(x + s, y + h); ctx.lineTo(x, y); }
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.fillStyle = labelColor;
+  ctx.font = `bold ${20 * scale}px -apple-system, Segoe UI, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (const l of anno.labels) {
+    ctx.fillText(l.text, l.x * scale, l.y * scale);
+  }
+}
+
+function downloadPng() {
+  const scale = +document.getElementById('pngScale').value;
+  const showAnno = document.getElementById('showAnno').checked;
+  const bg = getComputedStyle(document.querySelector('.stage')).backgroundColor;
+
+  const digitRects = digitSvgs.map(svg => svg.getBoundingClientRect());
+  let minLeft = Math.min(...digitRects.map(r => r.left));
+  let minTop = Math.min(...digitRects.map(r => r.top));
+  let maxRight = Math.max(...digitRects.map(r => r.right));
+  let maxBottom = Math.max(...digitRects.map(r => r.bottom));
+
+  // Annotations can extend above/below the digit row — grow the export
+  // bounds to fit them so nothing gets clipped.
+  if (showAnno) {
+    const anno = computeAnnotations(0, 0);
+    const grow = (x, y) => {
+      minLeft = Math.min(minLeft, x); maxRight = Math.max(maxRight, x);
+      minTop = Math.min(minTop, y); maxBottom = Math.max(maxBottom, y);
+    };
+    for (const l of anno.vlines) { grow(l.x, l.y1); grow(l.x, l.y2); }
+    for (const l of anno.hlines) { grow(l.x1, l.y); grow(l.x2, l.y); }
+    for (const a of anno.arrows) { grow(a.x, a.y); }
+    for (const l of anno.labels) {
+      const halfW = l.text.length * 5.9 + 7; // rough estimate, bold 20px font
+      grow(l.x - halfW, l.y); grow(l.x + halfW, l.y + 26);
+    }
+  }
+
+  const width = maxRight - minLeft, height = maxBottom - minTop;
+  const canvas = document.createElement('canvas');
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const loads = digitSvgs.map((svg, idx) => {
+    const rect = digitRects[idx];
+    const liveShapes = svg.querySelectorAll('path, circle');
+    const clone = svg.cloneNode(true);
+    clone.querySelectorAll('path, circle').forEach((shape, i) => {
+      const cs = getComputedStyle(liveShapes[i]);
+      shape.setAttribute('fill', cs.fill);
+      shape.setAttribute('stroke', cs.stroke);
+      shape.setAttribute('stroke-width', cs.strokeWidth);
+    });
+    clone.setAttribute('width', rect.width);
+    clone.setAttribute('height', rect.height);
+    const xml = new XMLSerializer().serializeToString(clone);
+    const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }));
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const x = (rect.left - minLeft) * scale;
+        const y = (rect.top - minTop) * scale;
+        ctx.drawImage(img, x, y, rect.width * scale, rect.height * scale);
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      img.src = url;
+    });
+  });
+
+  Promise.all(loads).then(() => {
+    if (showAnno) drawAnnotationsToCanvas(ctx, computeAnnotations(minLeft, minTop), scale);
+    canvas.toBlob((blob) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'tapbox-display.png';
+      a.click();
+    });
+  });
+}
+document.getElementById('downloadPng').addEventListener('click', downloadPng);
+
+window.addEventListener('keydown', (ev) => {
+  if (state.selected === null) return;
+  const activeTag = document.activeElement && document.activeElement.tagName;
+  if (activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA') return;
+  if (ev.key === 'ArrowLeft') { state.selected = Math.max(0, state.selected - 1); render(); return; }
+  if (ev.key === 'ArrowRight') { state.selected = Math.min(7, state.selected + 1); render(); return; }
+  if (ev.key === 'Backspace' || ev.key === 'Delete') { state.bytes[state.selected] = 0; render(); return; }
+  if (ev.key.length === 1) {
+    const b = charToByte(ev.key);
+    if (b !== null) { state.bytes[state.selected] = b; render(); }
+  }
+});
+
+function normalizeHex(hex) {
+  const m = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(hex.trim());
+  return m ? `#${m[1]}${m[1]}${m[2]}${m[2]}${m[3]}${m[3]}` : hex.trim();
+}
+const colorVarMap = { colorBg: '--segBg', colorOn: '--segOn', colorOff: '--segOff', colorLabel: '--labelColor' };
+for (const id in colorVarMap) {
+  const varName = colorVarMap[id];
+  const input = document.getElementById(id);
+  input.value = normalizeHex(getComputedStyle(document.documentElement).getPropertyValue(varName));
+  input.addEventListener('input', () => {
+    document.documentElement.style.setProperty(varName, input.value);
+  });
+}
+
+render();
+</script>
+</body>
+</html>

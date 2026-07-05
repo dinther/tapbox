@@ -1,6 +1,6 @@
 # tapbox
 
-TapBox turns any music source into a reliable Ableton Link tempo and downbeat master—whether the beat comes from a CDJ, an audio signal, or your own tap.
+TapBox turns any music source into a steady Ableton Link tempo and downbeat master—whether the beat comes from a CDJ, an audio signal, or your own tap.
 
 The device is based on a ESP32 controller that joins an [Ableton Link](https://www.ableton.com/en/link/) session over Ethernet or WiFi. Built on the [WT32-ETH01](http://www.wireless-tag.com/portfolio/wt32-eth01/) module with a MAX7219 8-digit 7-segment display.
 
@@ -11,15 +11,15 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 
 ## Features
 
-- **Three sync modes** — **Manual** (tap tempo), **Audio** (microphone auto-detects BPM, you tap the downbeat), and **CDJ** (Pioneer Pro DJ Link). Chosen with the `node` menu item; the active mode is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio)
-- **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session (Manual mode)
+- **Three sync sources** — **Manual** (tap tempo), **Audio** (microphone auto-detects BPM, you tap the downbeat), and **CDJ** (Pioneer Pro DJ Link). Chosen with the <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> menu item; the active source is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio)
+- **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session (Manual source)
 - **Audio beat detection** — an INMP441 I2S microphone listens to the room and tracks the tempo automatically via an FFT/mel-filterbank onset detector and a dynamic-programming beat tracker (`BTrack`); you tap the downbeat for phase. → [How beat detection works](BEAT_DETECTION.md)
 - **Pioneer CDJ sync** — passively listens for Pro DJ Link beat packets on the same network; bridges CDJ tempo directly into the Ableton Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
 - **Ethernet or WiFi** — Connects to your network as a client; browser config page for credentials; auto-failover to WiFi if no Ethernet present. Can also run as a **WiFi access point** or with a **direct Ethernet cable** to a laptop — no router needed.
-- **Static or DHCP** — configure IP address, subnet, and gateway via menu
-- **IP ticker on boot** — non-blocking scroll of connection type and IP address at startup (`Eth`, `SSID`, or `AP`); device is fully operational during the scroll
+- **Static or DHCP** — configure IP address, subnet, and gateway via the web config page
+- **IP ticker on boot** — non-blocking scroll of connection type, IP address, and security PIN at startup (`Eth`, `SSID`, or `AP`); the PIN doubles as the WiFi AP password and the web config page login; device is fully operational during the scroll
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
 - **Menu system** — on-device configuration with NVS persistence across power cycles
 - **OTA updates** — open the menu, hold both buttons 3 s, release and confirm with select; device reboots and flashes latest firmware automatically on next network connection
@@ -32,7 +32,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 | MCU / Ethernet | WT32-ETH01 (ESP32 + LAN8720A) |
 | Display | MAX7219 8-digit 7-segment module |
 | Input | Two momentary push buttons (tap + select) |
-| Microphone | INMP441 I2S MEMS microphone (for Audio mode) |
+| Microphone | INMP441 I2S MEMS microphone (for Audio source) |
 
 ### Pin Assignments
 
@@ -51,23 +51,24 @@ INMP441 wiring: **VDD → 3.3 V**, **GND → GND**, **L/R → GND** (selects the
 
 > GPIO 0, 16, 18, 19, 21, 22, 23, 25, 26, 27 are used by the onboard Ethernet — do not reassign.  
 > GPIO 34–39 are input-only with **no internal pull-up** — the tap/select buttons on IO35/IO39 therefore require external pull-ups.  
-> IO12 is a flash-voltage strapping pin (used here for I2S WS); acceptable on the WT32-ETH01.  
-> Battery monitoring was removed — IO36 is now the microphone data line.
+> IO12 is a flash-voltage strapping pin (used here for I2S WS); acceptable on the WT32-ETH01.
 
 ## Display Layout
 
-![Display layout](docs/display.jpg)
+![Display layout](docs/display.png)
 
 - **beat** — current BPM, four digits with decimal point (`120.0`)
-- **mode bar** — single horizontal segment: **top = CDJ**, **middle = Tap only**, **bottom = Audio**
+- **source bar** — single horizontal segment: **top = CDJ**, **middle = Tap only**, **bottom = Audio**
 - **count** — beat position in the bar (1–4, or up to your time signature)
-- **lock dot** — decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio mode searching; **off** = no lock
+- **lock dot** — decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio source searching; **off** = no lock
 - **peers** — number of other Ableton Link peers on the network
 
 **Menu mode:**
 ```
 [ label 0 ][ label 1 ][ label 2 ][ label 3 ][ blank ][ value right-justified ]
 ```
+![Menu mode example: Beat label with value 4](docs/display_menu_mode.png)
+
 Value flashes at 4 Hz in edit mode.
 
 ## Controls
@@ -84,21 +85,17 @@ Value flashes at 4 Hz in edit mode.
 
 | Label | Setting | Values |
 |-------|---------|--------|
-| `Beat` | Time signature | 2, 3, 4, 5, 6, 7 |
-| `nud ` | OSC nudge size | 50 ms · 20 ms · 5 ms |
-| `Led ` | Display brightness | 1 – 4 (live preview) |
-| `node` | Sync mode | `Cdj` · `Aud` (audio) · `tAP` (manual) |
-| `Lan.` | Network mode | `Auto` (DHCP) · `Stat` (static) · `  AP` (WiFi access point) |
-| `Addr` | Current IP address | read-only; shows last octet; press **select** to scroll full IP across display |
-| `IP  ` | Static IP address | sub-menu: Oct1–Oct4, 0–255 each |
-| `Sub.` | Subnet mask | sub-menu: Oct1–Oct4, 0–255 each |
-| `Hub.` | Gateway | sub-menu: Oct1–Oct4, 0–255 each |
-| `vEr ` | Firmware version | read-only; shows major.minor.patch |
-| `done` | Exit menu | returns to normal mode |
+| <img src="docs/menu_glyph_beat.png" alt="Beat" height="26" valign="middle"> | Time signature | 2, 3, 4, 5, 6, 7 |
+| <img src="docs/menu_glyph_led.png" alt="Led" height="26" valign="middle"> | Display brightness | 1 – 4 (live preview) |
+| <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> | Sync source | `Cdj` · `Aud` (audio) · `tAP` (manual) |
+| <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> | Network mode | `Auto` (DHCP) · `Stat` (static) · `  AP` (WiFi access point) |
+| <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> | Current IP address | read-only; shows last octet; press **select** to scroll full IP across display |
+| <img src="docs/menu_glyph_ver.png" alt="vEr" height="26" valign="middle"> | Firmware version | read-only; shows major.minor.patch |
+| <img src="docs/menu_glyph_done.png" alt="done" height="26" valign="middle"> | Exit menu | returns to normal mode |
 
-`node` selects the sync mode. The mic-tuning parameters that tune the audio beat detector are **web-only** (BPM tuning tab on the config page, not an on-device menu item) — see [BEAT_DETECTION.md](BEAT_DETECTION.md).  
-`IP`, `Sub.`, and `Hub.` are only shown when network mode is `Stat`. Each opens a sub-menu with four octets (Oct1–Oct4) plus a `done` item to return. Changing the network mode reboots after a 2-second `bOOt` display.  
-`Addr` is read-only. Navigating to it shows the last octet of the current IP as a quick reference; pressing **select** scrolls the full IP address across the display.  
+<img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> selects the sync source. The mic-tuning parameters that tune the audio beat detector, plus the static IP address, subnet mask, and gateway, are **web-only** (Network and BPM tuning tabs on the web config page, not on-device menu items) — see [BEAT_DETECTION.md](BEAT_DETECTION.md).  
+Changing the network mode reboots after a 2-second `bOOt` display.  
+<img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> is read-only. Navigating to it shows the last octet of the current IP as a quick reference; pressing **select** scrolls the full IP address across the display.  
 Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
 
 > Factory reset and OTA update are **not** in the menu — see [System Functions](#system-functions) below.
@@ -109,11 +106,11 @@ Both system functions are triggered from **within the menu** by holding both but
 
 ### OTA Firmware Update
 
-Open the menu, then hold both buttons for **3 seconds**. The display shows `UPd.----`. Release — the display shows `UPd SurE`. Press **select** to confirm. tapbox saves an update flag, erases OTA data if needed, and reboots. On the next boot, as soon as it gets a network connection, it downloads and installs the latest firmware. The display shows `UPd.` with a progress percentage, then `donE` before rebooting into the new firmware.
+Open the menu, then hold both buttons for **3 seconds**. The display shows <img src="docs/confirm_ota_hold.png" alt="UPd.----" height="26" valign="middle">. Release — the display shows <img src="docs/confirm_ota_confirm.png" alt="UPd Yes" height="26" valign="middle">. Press **select** to confirm. tapbox saves an update flag, erases OTA data if needed, and reboots. On the next boot, as soon as it gets a network connection, it downloads and installs the latest firmware. The display shows `UPd.` with a progress percentage, then <img src="docs/menu_glyph_done.png" alt="done" height="26" valign="middle"> before rebooting into the new firmware.
 
 ### Factory Reset
 
-Open the menu, then hold both buttons for **8 seconds**. The display shows `UPd.----` at 3 s then `rSEt SurE` at 8 s. Release and press **select** to confirm. tapbox resets all settings and reboots. Press **tap**, hold **select**, or wait 6 seconds to cancel.
+Open the menu, then hold both buttons for **8 seconds**. The display shows <img src="docs/confirm_ota_hold.png" alt="UPd.----" height="26" valign="middle"> at 3 s then <img src="docs/confirm_reset_confirm.png" alt="rSet Yes" height="26" valign="middle"> at 8 s. Release and press **select** to confirm. tapbox resets all settings and reboots. Press **tap**, hold **select**, or wait 6 seconds to cancel.
 
 ## WiFi
 
@@ -139,7 +136,7 @@ tapbox can sync with a laptop running Ableton Live (or any Link-enabled app) wit
 
 The simplest option — tapbox creates its own open WiFi network and everything runs on it.
 
-1. In the menu, navigate to `Lan.` and set it to `  AP`. Confirm with select — tapbox reboots.
+1. In the menu, navigate to <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> and set it to `  AP`. Confirm with select — tapbox reboots.
 2. On your laptop, connect to the **tapbox** WiFi network (open, no password).
 3. Ableton Link is active immediately. Tap to set tempo and phase as usual.
 4. The web config page is at **http://192.168.4.1** for display and network settings.
@@ -155,8 +152,8 @@ Modern hardware (including the WT32-ETH01 and USB-to-Ethernet adapters) supports
 
 **tapbox — set a static IP:**
 
-1. In the menu, set `Lan.` to `Stat`.
-2. Set `IP`, `Sub.`, and `Hub.` via their sub-menus. Use a private range that is not in use on any other interface — for example:
+1. In the menu, set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to `Stat`.
+2. On the web config page's Network tab, set the static IP, subnet, and gateway. Use a private range that is not in use on any other interface — for example:
 
    | Setting | Example |
    |---------|---------|
@@ -185,8 +182,8 @@ The config page at `http://<tapbox-ip>` is accessible from any browser over Ethe
 | Tab | Fields | Button | Effect |
 |-----|--------|--------|--------|
 | Network | WiFi SSID/password, Ethernet mode, static IP/subnet/gateway | Save Network — tapbox will reboot | Saves and reboots |
-| Settings | Time signature, sync mode, brightness | Save Settings | Saves and applies live — no reboot |
-| BPM tuning | Onset threshold, noise gate, accept window, tempo slew, plus a live chart of the microphone signal | Save Tuning | Applies live as you drag; see [BEAT_DETECTION.md](BEAT_DETECTION.md) |
+| Settings | Time signature, sync source, brightness | Save Settings | Saves and applies live — no reboot |
+| BPM tuning | Level floor, lock confidence, move confidence, plus a live BPM/confidence chart | Save Tuning | Applies live as you drag; see [BEAT_DETECTION.md](BEAT_DETECTION.md) |
 | Log | Live scrolling log of tap/arm/lock events over the same WebSocket the chart uses — no controls, view-only | — | — |
 
 ## OSC Interface
@@ -198,8 +195,7 @@ Send UDP packets to the device on **port 8000**.
 | `/tap` | — | Same as the tap button |
 | `/bpm` | `float` or `int` | Set BPM directly |
 | `/signature` | `int` | Set time signature (2–7) |
-| `/nudge_up` | — | Advance phase by nudge amount |
-| `/nudge_down` | — | Retard phase by nudge amount |
+| `/nudge` | `int` (ms, signed, optional) | Nudge phase by `ms` (+ = advance, − = retard); no argument = 20 ms |
 | `/downbeat` | — | Reset downbeat to now |
 
 ## Installing

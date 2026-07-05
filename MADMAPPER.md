@@ -45,14 +45,14 @@ Open **Preferences → Project → OSC** and add an entry under **OSC Outputs** 
 
 The markers in the image call out the two fields that identify tapbox: its **Name** (1) and its **IP** address (2). Leave the **OSC Input** settings at the top of the dialog at their defaults — they are not needed to send commands to tapbox.
 
-> Find tapbox's IP address on its display at boot — it scrolls the connection type and address (for example `Eth 192.168.1.117`). If the address changes between sessions, give tapbox a static IP (see the `Lan.` / `IP` menu items in the manual) so this entry never needs updating.
+> Find tapbox's IP address on its display at boot — it scrolls the connection type and address (for example `Eth 192.168.1.117`). If the address changes between sessions, give tapbox a static IP (set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to `Stat` on the device, then enter the address on the web config page's Network tab — see the manual) so this entry never needs updating.
 
 ### 2. Add an OSC Out module per command
 
 On the **Modules** tab, add a module instance and set its **Module** type to **OSC Out**. Configure it:
 
 - **Target → Device** (1): choose the `tapbox` output you defined in Preferences.
-- **Target → Address** (2): the OSC address of the command, e.g. `/tap`, `/bpm`, `/nudge_up`.
+- **Target → Address** (2): the OSC address of the command, e.g. `/tap`, `/bpm`, `/nudge`.
 - **Event → Event Type** (3): pick the payload type the command expects — `Nil` for commands that take no argument (like `/tap` or `/downbeat`), or a numeric type for commands that take a value (like `/bpm` or `/signature`).
 - **Trigger** (4): use **Send Now** to fire the command manually, or **Send On Value Change** to drive it from a control, timeline, or mapped surface.
 
@@ -65,8 +65,7 @@ Create one module per command you want to control. A typical set mirrors the tap
 | tapbox tap         | `/tap`        | Nil        | Same as pressing the tap button        |
 | tapbox bpm         | `/bpm`        | Float/Int  | Set tempo to a specific BPM            |
 | tapbox signature   | `/signature`  | Int (2–7)  | Change the time signature              |
-| tapbox nudge up    | `/nudge_up`   | Nil        | Shift phase forward by the nudge amount |
-| tapbox nudge down  | `/nudge_down` | Nil        | Shift phase backward by the nudge amount |
+| tapbox nudge       | `/nudge`      | Float/Int (ms) | Shift phase by `ms` (+ = forward, − = back); no argument = 20 ms |
 | tapbox downbeat    | `/downbeat`   | Nil        | Reset the downbeat to this moment       |
 
 Once these exist you can map them to buttons, faders, or timeline cues anywhere in MadMapper.
