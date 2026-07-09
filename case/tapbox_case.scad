@@ -1,7 +1,7 @@
 use <boards.scad>
 use <pathbuilder.scad>
 
-$fn=64;
+$fn=32;
 
 width = 105;
 length = 110;
@@ -21,6 +21,12 @@ module tube(outer_radius=10, inner_radius=8, height=20){
         cylinder(r=outer_radius, h=height);
         translate([0,0,-1]) cylinder(r=inner_radius, h=height + 2);
     }
+}
+
+module ledge(height=4, width=2, length=10){
+    rotate([90,0,90]) linear_extrude(length) M(0,-height)
+    v(height)
+    h(width);
 }
 
 module donut(radius=10, height=2){
@@ -79,6 +85,10 @@ module case_base(){
         union(){
             round_chamfered_cube(width, length, 4, chamfer, cr, ber, ser);
             translate([0,0,4]) round_chamfered_cube(width, length, height-4-lid_height, chamfer, cr, ser, ser);
+            translate([-51.4,0,20]) rotate([90,0,-90]) hull(){
+                translate([0,-1,1]) round_rounded_rect(width=52, length=25, corner_radius=2.5, edge_radius=0.5);
+                translate([0,-1,1.5]) round_rounded_rect(width=48, length=24, corner_radius=2.5, edge_radius=0.5);
+            }
         }
         difference(){
             translate([0,0,t]) round_chamfered_cube(width-t-t, length-t-t, 50, chamfer, cr-t, ser, ser);
@@ -89,6 +99,10 @@ module case_base(){
             translate([-w+t,l-t-12,0]) cube([12,12,height]);
             translate([w-t-12,-l+t,0]) cube([12,12,height]);
             translate([w-t-12,l-t-12,0]) cube([12,12,height]);
+            
+            //   Branding slot rail
+            translate([-49.5,-40, thickness]) cube([1.2, 80, height-thickness-lid_height]);
+            //translate([-49.3,18.5, thickness]) cube([1.2, 9, height-thickness-lid_height-4]);
             
             //  extra thickness for LAN port
             translate([w-t-1.3,14,0]) cube([2,25.2, 23]);
@@ -115,7 +129,7 @@ module case_base(){
         translate([46.1,0,thickness + 8]) switch(cut=true);
         
         //  Flat area for display board
-        translate([29.0,4.15,38.8]) cube([17, 83, 20], center=true);
+        translate([29.0,4.15,38.8]) cube([17.1, 83, 20], center=true);
         
         //  Flat area for menu button
         translate([29.0,-40,44.5]) cube([17, 14, 20], center=true);
@@ -129,15 +143,20 @@ module case_base(){
         translate([w-bolt_offset, -l+bolt_offset,-1]) cylinder(d=8.8, h=2);
         translate([w-bolt_offset, l-bolt_offset,-1]) cylinder(d=8.8, h=2);
         
-        // Microphone hole and slot
+        //  Microphone hole and slot
         translate([0, 50.4,thickness+10]) rotate([0,0,90]) inmu441_microphone_holder(cut=true);
         
+        //  Audio jack hole
+        translate([47.5,-21.7,21]) rotate([0,90,0]) cylinder(d=8.2, h=3);
+        translate([50.0,-21.7,21]) rotate([0,90,0]) cylinder(d=5.85, h=10);
+        
         //  Branding cutout
-        translate([-51.4,0,20]) rotate([90,0,-90]) hull(){
-            round_rounded_rect(width=40, length=20, corner_radius=2.5, edge_radius=0.5);
-            translate([0,0,1]) round_rounded_rect(width=42, length=21, corner_radius=2.5, edge_radius=0.5);
+        translate([-51.4-1,0,19]) rotate([90,0,-90]) hull(){
+            translate([0,0,-1.7]) round_rounded_rect(width=40, length=20, corner_radius=2.5, edge_radius=0.5);
+            translate([0,0,2]) round_rounded_rect(width=42, length=21, corner_radius=2.5, edge_radius=0.5);
         }
-        translate([-50.5,0,20]) rotate([0,0,-90]) cube([44, 1, 42], center=true);
+        //  Branding card slot
+        translate([-49.9,0,21+thickness-1]) rotate([0,0,-90]) cube([44, 1.1, 42], center=true);
     }
     
     //  lock bracket mounting posts for WT32 board
@@ -147,17 +166,21 @@ module case_base(){
     //  Lock and support for tp4056 board
     translate([30.0,-20.3,0]) tube(3, 1.4, 4+thickness);
     difference(){
-        translate([33,-40,thickness]) cube([17.4,28,4]);
+        translate([32,-40,thickness]) cube([18.4,28,4]);
         //  Mounting hole for TP4056
         translate([46.3,-14.2,-1]) cylinder(d=2.8, h=6+thickness);
     }
+    
+    //  Mounting points for PCM1808 board
+    translate([0,-37,thickness + 4]) PCM1808(studs=true, height=4);
    
-    //  Battery holder
-    translate([-36,-34.5,t]) rotate([0,0,90]) 26650_battery_bulkhead();
-    translate([-36,34.5,t]) rotate([0,0,-90]) 26650_battery_bulkhead();
+    //  Battery holder 72.2
+    translate([-34.9,-36.1,t]) rotate([0,0,-90]) 26650_battery_bulkhead("+");
+    translate([-34.9,36.1,t]) rotate([0,0,90]) 26650_battery_bulkhead("-");
     
     // microphone holder
     translate([0, 50.4,thickness+10]) rotate([0,0,90]) inmu441_microphone_holder();
+    translate([1, 50.4+2.0,thickness+10]) rotate([0,0,180]) ledge(3, 3, 18);
     
     //  Marking on off switch
     translate([52,5,thickness + 11]) rotate([90,0,90]) linear_extrude(1) text("1", size=4);
@@ -178,10 +201,6 @@ module lid(){
                 translate([0,0,lid_height*0.5]) round_chamfered_cube(width-4, length-4, lid_height*0.5, chamfer, cr, ber, ber);
                 
             }
-            
-            //  battery locks
-            translate([-36,20,-2]) cube([20,5,15], center=true);
-            translate([-36,-20,-2]) cube([20,5,15], center=true);
         }
         //  Battery cutouts
         translate([-36,0,-height+thickness+lid_height]) battery();
@@ -202,7 +221,11 @@ module lid(){
         translate([29, 2.15,-2]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module(cut=true);
         
         //  tap button slot
-        translate([-10,0,-27]) push_button(cut=true);
+        //translate([-10,0,-27]) push_button(cut=true);
+        
+        // sanwa button OBSF 30 black
+        translate([-10,0,2]) cylinder(d=30, h=lid_height + 2);
+        translate([-10,0,-1]) cylinder(d=36, h=2 - 0.3 + 1);
         
         //  menu button cutout
         translate([29,-38,-0.8]) menu_switch(cut=true); 
@@ -236,12 +259,12 @@ module inmu441_microphone_holder(cut = false){
         //  microphone hole
         translate([1.6-0.1,8,8]) rotate([0,90,0]) cylinder(d=4, h=10);
         //  Groove for components to clear
-        translate([1.6-0.1,6,4]) cube([2,4,16]);
+        translate([1.1-0.1,6,4]) cube([2,4,16]);
     } else {
         difference(){
-            cube([2,16,12]);
+            translate([-1,-1,0]) cube([3,18,12]);
             translate([0.6,1,1]) cube([1,14,16]);
-            translate([-2+1,1.5,1]) cube([2,13,16]);
+            translate([-3+1,1.5,1]) cube([3,13,16]);
             //  Groove for components to clear
             translate([1.6 - 0.1,6,4]) cube([3,4,16]);
         }
@@ -275,15 +298,13 @@ module wt32_bracket(){
             translate([-7.5,10.8,0]) cylinder(d=6+2, h=5+thickness);
             translate([-7.5,42.5,0]) cylinder(d=6+2, h=5+thickness);
         }
-
         translate([-7.5,10.8,0]) cylinder(d=6, h=4+thickness);
         translate([-7.5,42.5,0]) cylinder(d=6, h=4+thickness);
-        
         translate([-7.5, 11.5, -2]) cube([10, 31, 5]);
     }
 }
 
-module 26650_battery_bulkhead(){
+module 18650_battery_bulkhead_old(){
     spring_plate = 7.8;
     nub_plate = 1.5;
     bl = 65.8;
@@ -306,12 +327,49 @@ module 26650_battery_bulkhead(){
     }
 }
 
-
+module 26650_battery_bulkhead(marker="", slot = true){
+    bw = 5;
+    fw = 2.6;
+    sw = 1.4;
+    ss = 6;
+    nw = 0.2;
+    
+    spring_plate = 7.8;
+    nub_plate = 1.5;
+    bl = 65.8;
+    bd = 28.3+2;
+    l = bl;
+    w = bw;
+    h = bw;
+    translate([0,0,bd*0.5-2])
+    rotate([0,-90,0])
+    difference(){
+        translate([0,0,0]) union(){
+            translate([-bd*0.5,-bd*0.5,-bw]) cube([bd*0.5, bd, bw+fw+ss]);
+            translate([0,0,-bw]) cylinder(d=bd, h=bw+fw+ss);
+        }
+        translate([0,0,fw]) cylinder(d=26.3+0.3, h=ss+ fw+1);
+        translate([0,0,-10]) cube([25,25,ss+ fw+1], center=true);
+        translate([0,-12,fw]) cube([50,24,20+sw]);  //reduce second value to make tighter
+        
+        //  slot
+        translate([-5, -7, 0]) cube([50,14,nw]);
+        translate([5, -7, 0]) cube([50,14,sw]);
+        translate([-5, -5, 0]) cube([50,10,fw+10]);
+        translate([-3, -1.5, -bw-1]) cube([50,3,bw+2]);
+        if (slot){
+            translate([5,0,fw+0.25]) cube([20,50,0.5], center=true);
+        }
+    }
+    translate([2,8,23]) rotate([-42,0,0]) linear_extrude(2.5) text(marker, size=7, valign="center", halign="center");
+    translate([2,-8,23]) rotate([42,0,0]) linear_extrude(2.5) text(marker, size=7, valign="center", halign="center");
+}
 
 //translate([46.1,0,thickness + 8]) switch(cut=false);
 //translate([-10,0,thickness+ 4.5]) push_button(cut=false);
 //translate([-36,0,thickness]) battery();
 //translate([49.3,-39,thickness+4]) rotate([0,0,90]) TP4056();
+//translate([0,-37,thickness + 4]) PCM1808();
 //translate([-7.2,14,thickness+2]) wt32_eth01();
 //translate([0,0,5.2]) wt32_bracket();
 //translate([29, 2.15,28.8]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module();

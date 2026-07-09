@@ -10,7 +10,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 
 - **Three sync sources** — **Manual** (tap tempo), **Audio** (microphone auto-detects BPM, you tap the downbeat), and **CDJ** (Pioneer Pro DJ Link). Chosen with the <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> menu item; the active source is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio)
 - **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session (Manual source)
-- **Audio beat detection** — an INMP441 I2S microphone listens to the room and tracks the tempo automatically via an FFT/mel-filterbank onset detector and a dynamic-programming beat tracker (`BTrack`); you tap the downbeat for phase. → [How beat detection works](BEAT_DETECTION.md)
+- **Audio beat detection** — an INMP441 I2S microphone listens to the room and refines the tempo automatically via an FFT/mel-filterbank onset detector and a dynamic-programming beat tracker (`BTrack`), within a tunable BPM range of your tap — your tap is always ground truth; the mic can never wander off on its own. → [How beat detection works](BEAT_DETECTION.md)
 - **Pioneer CDJ sync** — passively listens for Pro DJ Link beat packets on the same network; bridges CDJ tempo directly into the Ableton Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
@@ -182,7 +182,7 @@ The config page at `http://<tapbox-ip>` is accessible from any browser over Ethe
 |-----|--------|--------|--------|
 | Network | WiFi SSID/password, Ethernet mode, static IP/subnet/gateway | Save Network — tapbox will reboot | Saves and reboots |
 | Settings | Time signature, sync source, brightness | Save Settings | Saves and applies live — no reboot |
-| BPM tuning | Level floor, lock confidence, move confidence, plus a live BPM/confidence chart | Save Tuning | Applies live as you drag; see [BEAT_DETECTION.md](BEAT_DETECTION.md) |
+| BPM tuning | Level floor, lock confidence, move confidence, BPM range, plus a live confidence chart | Save Tuning | Applies live as you drag; see [BEAT_DETECTION.md](BEAT_DETECTION.md) |
 | Log | Live scrolling log of tap/arm/lock events over the same WebSocket the chart uses — no controls, view-only | — | — |
 
 ## OSC Interface

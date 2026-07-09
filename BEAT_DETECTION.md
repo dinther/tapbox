@@ -89,7 +89,7 @@ per-FFT compute cost, which matters since this all runs inline in `mic_task`
 alongside I2S reads, sharing the chip with WiFi/Ethernet/HTTP/Link (no core
 pinning is used anywhere in this codebase).
 
-**This is the fast path** — the FFT→Mel→SuperFlux→BTrack chain (§3–5) runs on
+**This is the fast path** — the FFT→Mel→SuperFlux→BTrack chain (§3–6) runs on
 *every hop* (62.5Hz). `BTrack::process()` is a stateful per-frame machine with
 internal countdown timers; it must be fed every hop to behave correctly.
 
@@ -170,8 +170,12 @@ material, present in the reference implementation this was built against.
 With the Audio source, the mic is **display-only until you tap.** Your tap sets two
 references used by everything downstream:
 
-- `g_mic_tapAnchor` — the **anchor** tempo (centre of the octave fold and the ±20% clamp, §8)
+- `g_mic_tapAnchor` — the **anchor** tempo (centre of the octave fold and the BPM range gate, §8)
 - `g_mic_tracked` — the **applied** tempo (what goes to Link)
+
+All three — Tap, Audio, Link — are shown live as big numbers at the top of
+the BPM tuning tab, so you can see your own tap alongside what the mic is
+hearing and what's actually being published.
 
 **Tap grammar** (the box infers intent from how many taps arrive < 2 s apart):
 
@@ -195,13 +199,20 @@ flowchart TD
 ## 8. Follow/hold — applying BTrack's tempo
 
 A beat only reaches the tiers below if it clears an **absolute level floor**
-first (`g_micFloor`, dB of mean FFT power, BPM tuning tab slider, default off
-at -100dB). `SuperFlux` measures *relative* spectral change, so a quiet room
-still produces confident, periodic "beats" out of something as unmusical as
+first (`g_micFloor`, dB, BPM tuning tab slider, default off at -100dB).
+`SuperFlux` measures *relative* spectral change, so a quiet room still
+produces confident, periodic "beats" out of something as unmusical as
 keyboard typing — there is no loudness floor anywhere upstream of this gate.
-A beat whose own FFT hop falls below `g_micFloor` counts for **nothing**: not
-lock, not PLL, not tempo. (Discovered when typing near an armed, silent
-tapbox produced a run of confident, evenly-spaced "beats.")
+A beat whose level falls below `g_micFloor` counts for **nothing**: not lock,
+not PLL, not tempo. (Discovered when typing near an armed, silent tapbox
+produced a run of confident, evenly-spaced "beats.")
+
+The level checked is **smoothed, not the raw per-hop reading**: a single
+32ms FFT hop's power swings roughly 20dB on room noise alone (measured
+2026-07-09 — mic self-noise/room hum, not transient events), which is too
+noisy to gate on directly. `frameLevelDb` (raw) feeds `levelEmaDb`, an
+~800ms EMA (0.98/0.02 blend at the 62.5Hz hop rate); the floor gate and the
+web page's Level readout both read `levelEmaDb`, not the raw value.
 
 Confidence is **two-tier**, both tiers tunable sliders (`g_micConfSil` /
 `g_micConfMove` on the BPM tuning tab, defaults 0.30 / 0.60) because usable
@@ -238,23 +249,34 @@ doesn't flicker with estimation jitter — and because every real move lands
 exactly *on* the candidate (rather than a slew stopping short of it), there is
 no standing measured-vs-Link offset for the phase-lock (§9) to absorb.
 
-**(c) Clamp ±20% of the tap anchor** — the last-resort rail. Even if
-everything else misbehaved, the mic can never settle into a half/double-tempo
-basin. Re-tap to move outside the rail.
+**(c) BPM range gate** — a candidate more than `g_micRange` BPM from the tap
+anchor (`g_mic_tapAnchor`, default ±6, tunable 1–20 on the BPM tuning tab)
+does not move the tempo, full stop, no matter how confident the beat is.
+Unlike (a)/(b), this isn't a fixed constant — it's the main knob for how much
+you trust audio sensing to refine around your tap versus treating the tap as
+the whole story (2026-07-09 redesign: the anchor itself never moves except by
+re-tap; this gate only bounds how far `g_mic_tracked` may wander from it).
+Binary in/out for now, no graduated confidence-vs-distance requirement yet.
+Because `g_mic_tracked` can only ever be *set* to a candidate that already
+passed this check, it's bounded to anchor±range by construction — there's no
+separate clamp step the way the old fixed ±20% rail needed.
 
 **HOLD** — anything below the move tier (silence, a breakdown, a beat-free
-passage, a confidence dip mid-transition) or below the level floor (typing,
-handling noise) freezes the tempo at its last good value. Nothing chases
-low-confidence or too-quiet readings; beats clearing the floor and the lock
-tier (but not the move tier) still maintain the lock and phase alignment,
-and `tapbox`'s lock drops after the timeout (§9) if even those stop — but
-the tempo number stays put until move-tier beats return.
+passage, a confidence dip mid-transition), below the level floor (typing,
+handling noise), or **outside the BPM range gate** (a candidate too far from
+the anchor to trust) freezes the tempo at its last good value. Nothing
+chases low-confidence, too-quiet, or out-of-range readings; beats clearing
+the floor and the lock tier (but not move-tier confidence, or not in range)
+still maintain the lock and phase alignment, and `tapbox`'s lock drops after
+the timeout (§9) if even those stop — but the tempo number stays put until a
+beat clears every tier at once.
 
 Beat events are latched across the fast 62.5Hz hop loop (`btBeatSincePoll` in
-`mic_task()`) — each latch also stamps the beat hop's own FFT power and
-timestamp (`beatLevelDb`/`beatMs`), so the level floor judges the beat's
-actual energy rather than whatever the slower 20Hz poll sees — and consumed
-by that poll, so no `beat_event` is ever missed between polls.
+`mic_task()`) — each latch also stamps the beat hop's own smoothed level and
+timestamp (`beatLevelDb`/`beatMs`, see the level-floor note above), so the
+gate judges the beat's actual energy rather than whatever the slower 20Hz
+poll sees — and consumed by that poll, so no `beat_event` is ever missed
+between polls.
 
 ---
 
@@ -308,26 +330,30 @@ re-locks within a couple of beats once confident beats return.
 ## 11. Tuning chart — BTrack's own signals, live
 
 The web config page's **BPM tuning** tab chart plots exactly the quantities
-the follow/hold logic (§8) compares, in their native units. Two stacked strips
-over a rolling 6-second window:
+the follow/hold logic (§8) compares, in their native units, over a rolling
+6-second window.
 
-- **BPM strip** (top) — the measured BPM (cyan) and Link BPM (green) traces,
-  auto-scaled around the tap anchor so the ±20% clamp band (shaded) and the
-  anchor line (dashed) are always in view. A wrong-octave lock attempt shows
-  as the cyan trace jumping while the green trace either follows (a real
-  bug) or holds against the clamp (the rail working).
-- **Confidence strip** (bottom) — the confidence trace (orange) against the
-  **lock** (grey dashed) and **move** (green dashed) slider thresholds,
-  redrawn live as the sliders move, plus a vertical tick per beat: bright
-  green if that beat cleared the move tier (it drove the tempo), dim grey if
-  it only cleared the lock tier. A run of ticks poking above the move line
-  with no music playing is the typing-noise failure mode, visible directly
-  instead of inferred after the fact.
+**2026-07-09: the chart was a BPM strip (raw/Link BPM traces, top) stacked
+over a confidence strip (bottom) — the BPM strip was removed entirely** (it
+plotted a hardcoded ±20% band that no longer matched the real gate once
+`g_micRange` replaced the fixed clamp, and the numbers it showed are already
+covered live by the Tap/Audio/Link readouts at the top of the tab, §7). What
+remains is a single **confidence strip**: the confidence trace (orange)
+against the **lock** (grey dashed) and **move** (green dashed) slider
+thresholds, redrawn live as the sliders move, plus a vertical tick per
+BTrack-predicted beat — bright green if it cleared the move tier and the BPM
+range gate (it drove the tempo), dim grey if it only cleared the lock tier
+(including a beat confident enough to move tempo but outside the BPM
+range), **red if BTrack predicted a beat but the level floor rejected it**.
+A run of grey/green ticks poking above the move line with no music playing
+is the typing-noise failure mode; a run of RED ticks during real music is
+the opposite failure — real beats being wrongly rejected.
 
-Both strips, the live **Confidence**/**Level (dB)** readout beneath the
-chart, and the "Last 10s: N beats · M moved tempo" line are fed by the same
-20Hz telemetry packet `mic_task()` pushes over the `/ws` WebSocket. The chart
-lives in the embedded copy in `http_get_root()`.
+The chart, the live **Confidence**/**Level (dB)** readout beneath it (Level
+is the same ~800ms-smoothed value the floor gate checks, §8), and the
+"Last 10s: N beats · M moved tempo" line are all fed by the same 20Hz
+telemetry packet `mic_task()` pushes over the `/ws` WebSocket. The chart
+lives in the embedded copy in `http_get_root()` (`mDraw()`).
 
 ---
 
@@ -345,7 +371,7 @@ distinguished from the telemetry CSV by an `L` prefix.
   in `mic_task()`)
 
 **Not logged:** a per-beat trace of `BTrack`'s raw (pre-confidence-gate) BPM
-estimate — the existing "Measured BPM" readout already shows the
+estimate — the existing "Audio BPM" readout already shows the
 confidence-gated value live at 20Hz.
 
 The log only does work while a browser has the page open (same
@@ -359,26 +385,40 @@ persists across a page reload).
 
 None of these are on-device menu items — the on-device menu only carries
 settings usable without a browser at hand (see `src/main.cpp`, `enum MenuIdx`).
-All three mic-tuning parameters live on the **BPM tuning** tab of the web
-config page, and all three are the real tempo path's actual gates (§8), not
+All four mic-tuning parameters live on the **BPM tuning** tab of the web
+config page, and all four are the real tempo path's actual gates (§8), not
 chart-only knobs:
 
 | Web field | Variable | Default | What it does |
 |-----------|----------|---------|--------------|
-| Level floor | `g_micFloor` | -100 dB (off) | Absolute floor, dB of a beat's own FFT-hop power. Below it, a beat counts for nothing — no lock, no PLL, no tempo move. Range -100..-10. |
+| Level floor | `g_micFloor` | -100 dB (off) | Absolute floor, dB, checked against the ~800ms-smoothed level (§8), not the raw per-hop reading. Below it, a beat counts for nothing — no lock, no PLL, no tempo move. Range -100..-10. |
 | Lock confidence | `g_micConfSil` | 0.30 | `BTrack` confidence required to keep the lock alive and feed the phase-lock PLL. |
 | Move confidence | `g_micConfMove` | 0.60 | `BTrack` confidence required to actually change the tempo (FOLLOW vs. HOLD, §8). |
+| BPM range | `g_micRange` | ±6 BPM | How far a candidate may be from the tap anchor and still move the tempo (§8's FOLLOW (c)). Outside it → HOLD, same as failing the confidence floor. Binary in/out, range 1–20. |
 
-They're sliders rather than constants because none of the three has a value
+They're sliders rather than constants because none of the four has a value
 that works everywhere: achievable confidence depends on the mic and the room,
-and the useful level floor depends on ambient noise and how loud the source
-is. Tune them against the live chart (§11) — play music, watch where the
-confidence trace and level readout sit, then set both tiers and the floor
-just outside that range.
+the useful level floor depends on ambient noise and how loud the source is,
+and how far you trust audio sensing to refine your tap is a judgment call
+only you can make. Tune the floor and confidence tiers against the live
+chart (§11) — play music, watch where the confidence trace and level readout
+sit, then set them just outside that range.
 
-Fixed constants (not exposed): anti-flicker deadband 0.4 BPM, clamp ±20%,
-PLL gain 0.15, lock = 4 confident beats, lock timeout = 6 beat-periods
-(min 3.5s), `BTrack` warmup ~3s.
+**Level floor tuning note (2026-07-09):** a raw, unsmoothed single-hop level
+reading is too noisy to gate on — measured swinging ~20dB during genuine
+silence (mic self-noise/room hum, no transient events) in one real setup,
+enough to overlap with quiet-to-moderate music at normal listening volume.
+The ~800ms smoothing (§8) fixed this; with it, silence and music separated
+into distinct (if sometimes narrow, depending on listening volume) bands. The
+**factory default stays -100dB (off)** deliberately rather than shipping a
+pre-tuned floor — an aggressive default would silently break audio-mode BPM
+tracking for anyone who hasn't tuned it for their room, which is worse than
+the false-beat problem a floor prevents. Expect this to matter less once
+line-level input (PCM1808) replaces the acoustic mic path.
+
+Fixed constants (not exposed): anti-flicker deadband 0.4 BPM, level-EMA time
+constant ~800ms, PLL gain 0.15, lock = 4 confident beats, lock timeout =
+6 beat-periods (min 3.5s), `BTrack` warmup ~3s.
 
 ---
 
@@ -390,7 +430,7 @@ PLL gain 0.15, lock = 4 confident beats, lock timeout = 6 beat-periods
 | Vendored kissfft (BSD-3-Clause) | `src/dsp/third_party/kissfft/` |
 | I2S init (stereo, left slot) | `init_i2s_mic()` in `src/main.cpp` |
 | Capture → FFT → Mel → SuperFlux → BTrack → follow/hold → Link | `mic_task()` in `src/main.cpp` |
-| Tuning chart (BPM + confidence strips, §11) | embedded in `http_get_root()` in `src/main.cpp` |
+| Tuning chart (confidence strip, §11) | embedded in `http_get_root()` in `src/main.cpp` |
 | Tap grammar (arm / override / re-sync) | `do_tap()` in `src/main.cpp` |
 | Source + lock display (source bars, lock dot on beat digit) | `update_display()` in `src/main.cpp` |
 | Live event log (web page Log tab) | `ws_log()` in `src/main.cpp` |

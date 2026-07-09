@@ -11,12 +11,12 @@ All prices are approximate AliExpress retail at time of writing. Quantities are 
 | INMP441 | I2S MEMS microphone (Audio source) | 1 | $3.00 | [AliExpress](https://www.aliexpress.com/item/1005009648491391.html) |
 | 26650 Li-ion cell | 3.7 V rechargeable battery | 1 | $10.00 | [AliExpress](https://www.aliexpress.com/item/1005011871986176.html) |
 | TP4056 charger board | USB Li-ion charge/protection module | 1 | $2.87 | [AliExpress](https://www.aliexpress.com/item/1005009566821602.html) |
-| Arcade button | Tap button (momentary, illuminated) | 1 | $6.00 | [AliExpress](https://www.aliexpress.com/item/33029461114.html) |
-| sanwa button OBSF 30 black | Select button | 1 | $0.50 | [AliExpress](https://www.aliexpress.com/item/1005006384754591.html) |
+| sanwa button OBSF 30 black | Tap button (momentary, illuminated) | 1 | $6.00 | [AliExpress](https://www.aliexpress.com/item/33029461114.html) |
+| mini Switch Push Button | Select button | 1 | $0.50 | [AliExpress](https://www.aliexpress.com/item/1005006384754591.html) |
 | Slide switch | Power switch | 1 | $0.70 | — |
 | Resistor 10 kΩ | Pull-ups for IO35 / IO39 buttons | 2 | $0.01 | — |
 
-**Device total: ~$35.54**
+**Device total: ~$34.65**
 
 ## Development tool
 
