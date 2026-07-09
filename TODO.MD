@@ -1,4 +1,16 @@
 Ideas (parked):
+- BPM range gate (g_micRange, BEAT_DETECTION.md §8/§13) is currently binary
+  in/out — a candidate either clears g_micConfMove AND is within range, or
+  it's HOLD. Discussed 2026-07-09: replace the flat move-confidence
+  threshold with a ramp that requires higher confidence the closer a
+  candidate gets to the range boundary (starting at the existing
+  g_micConfMove value right at the anchor, rising to unreachable exactly at
+  the edge) — would unify the range and confidence checks into one
+  mechanism instead of two ANDed conditions, and "outside range" would fall
+  out naturally rather than needing a separate case. Explicitly deferred in
+  favor of shipping the binary version first ("let's start with this where
+  the range is binary for now") — revisit once the binary version has been
+  used for a while.
 - ws_push_task (browser telemetry) currently pushes at 20Hz, matching
   mic_task's poll rate purely by coincidence — the two are independent
   loops. mic_task's 20Hz cadence must stay (real tempo-path latency: how
@@ -25,7 +37,7 @@ Ideas (parked):
 - Move-tier false negative: confidence can sit just under g_micConfMove while
   the folded candidate is rock solid (observed on real hardware, known-correct
   reading that never moved the tempo). Add a consistency fallback at the move
-  check in mic_task() (~main.cpp:2223): track consecutive lock-tier beats
+  check in mic_task() (~main.cpp:2235): track consecutive lock-tier beats
   whose folded `cand` stays within a tight band (e.g. ±0.3 BPM) of each other,
   accumulating a growing count rather than a one-shot pass/fail — a run of
   otherwise-quality beats should eventually overcome a marginal confidence
@@ -46,8 +58,18 @@ Ideas (parked):
   but stable alias could rack up enough consecutive "consistent" beats to
   trip this fallback, so don't let the counter alone override confidence
   when `cand` is sitting near that high ceiling — only apply it comfortably
-  away from the edge (e.g. inside the anchor's ±15% rather than the full
-  ±20% clamp, or some similar margin below ~160 BPM).
+  away from the edge, some margin below ~160 BPM.
+  **Reconsider before implementing (2026-07-09):** the move check is no
+  longer gated by a ±20% clamp — it's now `g_micRange` (default ±6 BPM,
+  user-tunable, see BEAT_DETECTION.md §8/§13). A default-config alias would
+  have to land within 6 BPM of the tapped anchor to even be a candidate,
+  which is a much narrower coincidence than the old ±20% window, so the
+  aliasing-ceiling risk this fallback guards against is smaller than when
+  this idea was written. More importantly, this session's redesign pulled
+  deliberately *toward* the tap being sole ground truth and audio sensing
+  doing less unsupervised work, not more — a fallback that makes moves more
+  permissive cuts against that direction. Don't implement without
+  re-discussing whether it's still wanted.
 
 Nice to have (parked):
 - WiFi AP alongside Ethernet: currently Ethernet connecting calls
@@ -61,10 +83,6 @@ Nice to have (parked):
   networks) and costs a bit more power draw.
 
 Cosmetic (parked):
-- tapbox_web_config_BPM_tuner.png needs retaking to reflect the current BPM
-  tuning tab (Level floor / Lock confidence / Move confidence sliders, Log
-  tab)
-- MANUAL.md cleanup pass once the above screenshot lands
 - Do we want slider changes to NOT hit NVS flash on every drag? Currently
   /apply saves to NVS each time (flash wear, minor).
 - Save Tuning button should return to the correct tab after posting.
