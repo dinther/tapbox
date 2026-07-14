@@ -1,10 +1,14 @@
 # tapbox — Audio Beat Detection
 
-How the microphone-based BPM detection works, end to end.
+How the audio BPM detection works, end to end.
 
-This describes **Audio source** (`MODE_AUDIO`), one of the three sync sources
-(CDJ / Audio / Manual). All of the logic below lives in `mic_task()` and
-`do_tap()` in `src/main.cpp`, plus the DSP core ported (MIT-licensed) from
+This describes the two **audio sources** — **Mic** (`MODE_MIC`, INMP441
+microphone) and **Line** (`MODE_LINE`, PCM1808 line-in ADC) — out of the four
+sources (CDJ / Mic / Line / Tap). The two differ only in capture hardware and
+sample rate (§3); from the FFT onward (§4–13) the pipeline is identical, so
+where the prose below says "the mic," read "whichever audio source is active."
+All of the logic lives in `mic_task()` and `do_tap()` in `src/main.cpp`, plus
+the DSP core ported (MIT-licensed) from
 [absent42/esphome-audio-reactive](https://github.com/absent42/esphome-audio-reactive)
 into `src/dsp/`.
 
@@ -21,17 +25,19 @@ the machine:
 
 | Job | Owner | Why |
 |-----|-------|-----|
-| **Tempo** (BPM) | the **microphone** | machines are good at measuring intervals |
+| **Tempo** (BPM) | the **audio source** (mic or line-in) | machines are good at measuring intervals |
 | **Downbeat** (phase / "beat 1") | the **tap button** | humans hear musical phrasing |
 
-So: **you tap the downbeat, the mic carries the tempo.** Your tap is *ground
-truth*; the mic is only ever allowed to refine and track *around* it. This single
-rule is why the system stays trustworthy — the mic can never wander off on its own.
+So: **you tap the downbeat, the detector carries the tempo.** Your tap is *ground
+truth*; the detector is only ever allowed to refine and track *around* it. This single
+rule is why the system stays trustworthy — the detector can never wander off on its own.
 
 ```mermaid
 flowchart LR
     A[Music in the room] -->|acoustic| MIC[INMP441 mic]
+    B[Mixer / player output] -->|3.5mm line| ADC[PCM1808 ADC]
     MIC -->|tempo| LINK[Ableton Link grid]
+    ADC -->|tempo| LINK
     TAP[Your tap] -->|downbeat / anchor| LINK
     LINK --> OUT[Synced devices]
 ```
@@ -41,8 +47,8 @@ flowchart LR
 ## 2. The detection pipeline
 
 A proper FFT-based pipeline, ported from a MIT-licensed ESP32 audio-analysis
-library and re-derived for tapbox's 32kHz mic (the library targets ESPHome
-devices at 22.05/44.1kHz):
+library and re-derived for tapbox's rates — 32kHz mic / 31.25kHz line-in (the
+library targets ESPHome devices at 22.05/44.1kHz):
 
 1. **`FFTProcessor`** — real FFT via [kissfft](https://github.com/mborgerding/kissfft) (vendored, BSD-3-Clause)
 2. **`MelFilterbank`** — 32-band log-mel spectral representation
@@ -58,7 +64,14 @@ devices at 22.05/44.1kHz):
 
 ## 3. Capturing audio (I2S)
 
-- Mic: **INMP441** (digital I2S MEMS), `L/R` tied to GND.
+Two independent capture paths; `mic_task()` is the single reader and consumes
+whichever one the Source setting selects, resetting the whole pipeline
+(filterbank geometry, SuperFlux, BTrack, arm/lock state) on a switch — so
+re-tap once after switching sources.
+
+**Mic** (`MODE_MIC`, I2S0, ESP32 as master):
+
+- **INMP441** digital I2S MEMS mic, `L/R` tied to GND.
 - Sample rate: **32 kHz**.
 - INMP441 channel selection on the ESP32 is a known finicky point (L/R→GND
   *should* select the left slot, but configs don't always behave). In our
@@ -66,6 +79,21 @@ devices at 22.05/44.1kHz):
   reading **both** slots in stereo and using only the **left** samples worked
   reliably — so that's what we do (`i += 2` through the buffer). This is an
   empirical workaround for our setup, not a documented driver bug.
+
+**Line** (`MODE_LINE`, I2S1, ESP32 as slave):
+
+- **PCM1808** 24-bit stereo ADC fed from the 3.5 mm line input; both channels
+  are averaged to mono into the same ring buffer.
+- The **PCM1808 masters the I2S bus** (MD0/MD1 strapped high = Master mode,
+  256fs): it derives BCK (2 MHz) and LRCK internally from an **8 MHz system
+  clock** the ESP32 generates with LEDC (80 MHz APB ÷ 10, an exact integer
+  division — a fractional divider would jitter, and SCKI jitter degrades the
+  ADC). Single clock domain by construction; the ESP32 just listens as an
+  I2S slave receiver.
+- Sample rate: 8 MHz ÷ 256 = **31.25 kHz** — deliberately close to the mic's
+  32 kHz so the pipeline keeps its character across sources.
+- See `PCM1808_PLAN.md` for the full bring-up (wiring, straps, scope
+  checkpoints).
 
 ---
 
@@ -75,6 +103,13 @@ Raw samples accumulate into a ring buffer; once **1024 samples** (a 32ms window)
 are available, a real FFT runs and the window slides forward by a **512-sample
 hop** (16ms) — 50% overlap, giving a **62.5Hz** frame rate for everything
 downstream (`kFrameHz` throughout `src/dsp/`).
+
+On **line-in** the same 512-sample hop at 31.25 kHz gives **61.035 Hz** — but
+`kFrameHz` is a compile-time constant inside `btrack.h`/`tempo_estimator.h`,
+so the estimator's reported BPM would read 2.4% high on line-in. `mic_task()`
+corrects this at the point of consumption: line-in BPM readings are scaled by
+61.035/62.5 (×0.97656) before the octave fold, gates, and Link ever see them.
+Confidence is unitless and needs no scaling.
 
 ```mermaid
 flowchart LR
@@ -97,7 +132,8 @@ internal countdown timers; it must be fed every hop to behave correctly.
 
 ## 5. Mel filterbank + SuperFlux onset detection
 
-The squared FFT magnitudes feed a 32-band triangular mel filterbank (80Hz–16kHz)
+The squared FFT magnitudes feed a 32-band triangular mel filterbank (80Hz–16kHz
+on the mic; the top band drops to 15kHz on line-in, under its 15.625kHz Nyquist)
 — the same perceptually-scaled representation used in most music-information-
 retrieval onset detectors, giving finer resolution at low frequencies (where
 kicks and bass live) than a linear FFT bin split would.
@@ -167,7 +203,7 @@ material, present in the reference implementation this was built against.
 
 ## 7. Arming — the tap is ground truth
 
-With the Audio source, the mic is **display-only until you tap.** Your tap sets two
+With a Mic or Line source, the detector is **display-only until you tap.** Your tap sets two
 references used by everything downstream:
 
 - `g_mic_tapAnchor` — the **anchor** tempo (centre of the octave fold and the BPM range gate, §8)
@@ -302,12 +338,12 @@ never a whole bar, so the bar position you tapped is preserved.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> DisplayOnly: enter Audio source
+    [*] --> DisplayOnly: enter Mic or Line source
     DisplayOnly --> Armed: tap (sets anchor + downbeat)
     Armed --> Locked: 4 consecutive confident beats
     Locked --> Armed: no confident beat for 6 beat-periods (min 3.5s)
-    Armed --> DisplayOnly: leave Audio source
-    Locked --> DisplayOnly: leave Audio source
+    Armed --> DisplayOnly: leave Mic/Line source
+    Locked --> DisplayOnly: leave Mic/Line source
     Locked --> Locked: re-tap = re-sync downbeat
 ```
 
@@ -413,8 +449,12 @@ into distinct (if sometimes narrow, depending on listening volume) bands. The
 **factory default stays -100dB (off)** deliberately rather than shipping a
 pre-tuned floor — an aggressive default would silently break audio-mode BPM
 tracking for anyone who hasn't tuned it for their room, which is worse than
-the false-beat problem a floor prevents. Expect this to matter less once
-line-level input (PCM1808) replaces the acoustic mic path.
+the false-beat problem a floor prevents. The **Line source largely sidesteps
+this**: a line feed is electrically clean (no room noise, no typing, no
+audience), so the floor mainly earns its keep on the mic. Note the floor —
+like all four knobs — is a single shared value, not per-source; if you tune
+it aggressively for a noisy room on the mic, remember it also applies to the
+(much quieter) line input.
 
 Fixed constants (not exposed): anti-flicker deadband 0.4 BPM, level-EMA time
 constant ~800ms, PLL gain 0.15, lock = 4 confident beats, lock timeout =
@@ -428,8 +468,9 @@ constant ~800ms, PLL gain 0.15, lock = 4 confident beats, lock timeout =
 |-------|----------|
 | FFT / mel filterbank / onset / beat tracker (ported DSP core) | `src/dsp/{fft_processor,mel_filterbank,superflux_onset,btrack,tempo_estimator}.h` |
 | Vendored kissfft (BSD-3-Clause) | `src/dsp/third_party/kissfft/` |
-| I2S init (stereo, left slot) | `init_i2s_mic()` in `src/main.cpp` |
-| Capture → FFT → Mel → SuperFlux → BTrack → follow/hold → Link | `mic_task()` in `src/main.cpp` |
+| Mic I2S init (I2S0 master, stereo, left slot) | `init_i2s_mic()` in `src/main.cpp` |
+| Line-in I2S init (I2S1 slave RX) + 8 MHz SCKI clock | `init_i2s_line()` / `line_clock_start()` in `src/main.cpp` |
+| Capture (either source) → FFT → Mel → SuperFlux → BTrack → follow/hold → Link | `mic_task()` in `src/main.cpp` |
 | Tuning chart (confidence strip, §11) | embedded in `http_get_root()` in `src/main.cpp` |
 | Tap grammar (arm / override / re-sync) | `do_tap()` in `src/main.cpp` |
 | Source + lock display (source bars, lock dot on beat digit) | `update_display()` in `src/main.cpp` |
