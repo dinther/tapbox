@@ -2492,11 +2492,17 @@ extern "C" void app_main(void) {
     if (g_net != 2) {
         initEthernet(g_net, g_ip, g_sn, g_gt);
 
-        // Static IP only needs link-up (~2 s); DHCP needs IP assignment (~5 s).
-        uint32_t eth_timeout = (g_net == 1) ? 3000 : 5000;
+        // Static IP only needs link-up (~2 s). DHCP needs address assignment:
+        // a lease normally lands within ~5 s, but with no DHCP server on the
+        // wire (direct cable to a Denon player or laptop) lwIP auto-IP
+        // self-assigns a 169.254.x.x address, which takes ~10 s. Wait that
+        // long only while a cable is present — no link after 3 s means no
+        // cable, so fall through to WiFi quickly.
         printf("Waiting for Ethernet");
         uint32_t start = now_ms();
-        while (!ethConnected && (now_ms() - start) < eth_timeout) {
+        while (!ethConnected) {
+            uint32_t limit = (g_net == 0 && ethLinkUp) ? 15000 : 3000;
+            if (now_ms() - start >= limit) break;
             vTaskDelay(pdMS_TO_TICKS(250));
             printf(".");
             fflush(stdout);

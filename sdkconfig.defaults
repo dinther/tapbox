@@ -11,6 +11,11 @@ CONFIG_LWIP_IGMP=y
 CONFIG_LWIP_SO_RCVBUF=y
 CONFIG_LWIP_MAX_SOCKETS=16
 
+# Auto-IP fallback: with no DHCP server on the wire (direct cable to a Denon
+# player or laptop) self-assign a 169.254.x.x link-local address after the
+# DHCP probes fail — same range Engine OS uses, so Link peers can meet
+CONFIG_LWIP_AUTOIP=y
+
 # C++ exceptions required by Ableton Link internals
 CONFIG_COMPILER_CXX_EXCEPTIONS=y
 CONFIG_COMPILER_CXX_RTTI=y

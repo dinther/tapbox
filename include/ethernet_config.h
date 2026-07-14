@@ -9,7 +9,8 @@
 
 static const char *ETH_TAG = "eth";
 
-static bool ethConnected = false;
+static bool ethConnected = false;   // link up AND usable IP (DHCP, auto-IP, or static)
+static bool ethLinkUp    = false;   // physical link only — cable plugged into a live port
 static char ethIPStr[16]  = "0.0.0.0";
 
 static esp_netif_t *s_eth_netif  = nullptr;
@@ -21,6 +22,7 @@ static void on_eth_event(void *, esp_event_base_t, int32_t id, void *) {
             esp_netif_set_hostname(s_eth_netif, "tapbox");
             break;
         case ETHERNET_EVENT_CONNECTED:
+            ethLinkUp = true;
             if (s_use_static) {
                 // With static IP there is no GOT_IP event; mark connected here
                 // and populate ethIPStr from the netif's configured address.
@@ -32,6 +34,7 @@ static void on_eth_event(void *, esp_event_base_t, int32_t id, void *) {
             break;
         case ETHERNET_EVENT_DISCONNECTED:
         case ETHERNET_EVENT_STOP:
+            ethLinkUp    = false;
             ethConnected = false;
             break;
         default:
