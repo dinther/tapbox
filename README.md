@@ -4,7 +4,7 @@ TapBox turns any music source into a steady Ableton Link tempo and downbeat mast
 
 The device is based on a ESP32 controller that joins an [Ableton Link](https://www.ableton.com/en/link/) session over Ethernet or WiFi. Built on the [WT32-ETH01](http://www.wireless-tag.com/portfolio/wt32-eth01/) module with a MAX7219 8-digit 7-segment display. The famous silent sanwa button OBSF 30 serves as your tap button.
 
-<img src="docs/AI Case Render.png" alt="Src" height="320" valign="middle">
+<img src="docs/AI Case Render_corrected.png" alt="Src" height="320" valign="middle">
 
 ## Features
 
