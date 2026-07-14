@@ -88,7 +88,7 @@ static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 13
+#define FW_MINOR 14
 #define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
