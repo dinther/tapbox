@@ -1,0 +1,17 @@
+menu "Ableton Link"
+
+    config LINK_ESP_TASK_CORE_ID
+        int "Link task core affinity"
+        depends on !FREERTOS_UNICORE
+        range -1 1
+        default -1
+        help
+            Select which CPU core to run Link tasks on.
+
+            -1: No affinity (tskNO_AFFINITY) - FreeRTOS schedules on any core
+             0: Core 0 - Note that WiFi also runs on core 0, which may cause contention
+             1: Core 1 - Recommended to avoid contention with WiFi
+
+            This option is only available when FREERTOS_UNICORE is not enabled.
+
+endmenu

@@ -1,17 +1,13 @@
 dependencies:
   docwilco/esp_abl_link:
-    component_hash: e1300695d9caf90c9145027d873689cbec3d13103a1dbb2161a5cefad8aace3d
     dependencies:
     - name: espressif/asio
-      registry_url: https://components.espressif.com
-      require: private
       version: '>=1.32.0'
     - name: idf
-      require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com/
-      type: service
+      path: D:\Projects\tapbox\components\esp_abl_link
+      type: local
     targets:
     - esp32
     - esp32s2
@@ -28,7 +24,7 @@ dependencies:
       require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.32.0~2
   espressif/sock_utils:
@@ -47,7 +43,8 @@ dependencies:
     version: 6.0.1
 direct_dependencies:
 - docwilco/esp_abl_link
+- espressif/asio
 - idf
-manifest_hash: bc1c121473722af1a5b31a10be8e1911f78b5c8c5a30403e7804deb796d154fe
+manifest_hash: 227ec8f62273af438527031079f9da5c9b39e56597d4fb9bcc0e81b84757a785
 target: esp32
 version: 2.0.0

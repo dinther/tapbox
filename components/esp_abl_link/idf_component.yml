@@ -1,0 +1,22 @@
+dependencies:
+  asio:
+    version: '>=1.32.0'
+  idf: '>=5.0'
+description: 'ESP-IDF component for Ableton Link''s C wrapper.
+
+  '
+license: GPL-2.0-or-later
+maintainers:
+- DocWilco <espressif@drwil.co>
+repository: https://github.com/docwilco/esp_abl_link.git
+tags:
+- ableton
+- link
+- audio
+- sync
+targets:
+- esp32
+- esp32s2
+- esp32s3
+url: https://github.com/docwilco/esp_abl_link/
+version: 3.1.5~1

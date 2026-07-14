@@ -1,4 +1,9 @@
 dependencies:
-  docwilco/esp_abl_link: ">=3.1.5"
+  # Local copy in components/esp_abl_link (override_path): carries the tapbox
+  # patch that removes Link's /24 subnet filter (upstream d466f42), which the
+  # component manager would otherwise revert on every managed re-download.
+  docwilco/esp_abl_link:
+    version: ">=3.1.5"
+    override_path: "../components/esp_abl_link"
   idf:
     version: ">=5.3"
