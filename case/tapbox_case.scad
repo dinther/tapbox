@@ -127,12 +127,13 @@ module case_base(){
              
         // Hole for power switch
         translate([46.1,0,thickness + 8]) switch(cut=true);
+        translate([52.4,-12,thickness + 3.25]) cube([10, 24, 13.8]);
         
         //  Flat area for display board
         translate([29.0,4.15,38.8]) cube([17.1, 83, 20], center=true);
         
         //  Flat area for menu button
-        translate([29.0,-40,44.0-0.7]) cube([17, 14, 20], center=true);
+        translate([29.0,-40,44.0-0.9]) cube([17, 14, 20], center=true);
         
         //  Mounting holes for Display board
         translate([29, 2.15,31]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module_holes();
@@ -147,8 +148,8 @@ module case_base(){
         translate([0, 50.4,thickness+10]) rotate([0,0,90]) inmu441_microphone_holder(cut=true);
         
         //  Audio jack hole
-        translate([47.5,-21.7,21]) rotate([0,90,0]) cylinder(d=8.2, h=3);
-        translate([50.0,-21.7,21]) rotate([0,90,0]) cylinder(d=5.85, h=10);
+        translate([51.5,-21.7,21]) rotate([0,90,0]) cylinder(d=8.2, h=3);
+        translate([49.0,-21.7,21]) rotate([0,90,0]) cylinder(d=5.85, h=10);
         
         //  Branding cutout
         translate([-51.4-1,0,19]) rotate([90,0,-90]) hull(){
