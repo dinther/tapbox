@@ -136,7 +136,7 @@ If WiFi credentials are stored but the connection fails, tapbox falls back to AP
 
 ## Direct Connection — No Network Required
 
-tapbox can sync with a laptop running Ableton Live (or any Link-enabled app) without a router or existing network. Two approaches work.
+tapbox can sync with a laptop running Ableton Live (or any Link-enabled app) — or directly with a Link-enabled standalone player — without a router or existing network. Three approaches work: tapbox's own WiFi access point, a direct Ethernet cable with automatic addressing (zero configuration, v1.14+), or a direct cable with static IPs.
 
 ### WiFi AP mode
 
@@ -150,9 +150,23 @@ The simplest option — tapbox creates its own open WiFi network and everything 
 
 > OTA firmware updates are not available in AP mode (no internet path). CDJ sync is also unavailable — Pioneer players use a wired network and do not join a WiFi access point.
 
-### Direct Ethernet
+### Direct Ethernet — automatic (v1.14+)
 
-A single cable from tapbox to a laptop Ethernet port, with both ends set to a static IP. This gives the most stable connection and keeps the laptop's WiFi free for internet.
+Since firmware **v1.14** a single patch cable between tapbox and a computer (or a Link-enabled player such as a Denon SC6000) needs **no configuration at all**. Leave tapbox on its default <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> = `DHCP` setting and connect the cable:
+
+1. tapbox looks for a DHCP server; with none on the wire it self-assigns a **link-local address** (`169.254.x.x`) after a few seconds and scrolls it on the display. The address looks random but is derived from the device's MAC, so it stays the same every time.
+2. The other end does the same — Windows ("APIPA"), macOS, Linux, and Engine OS players all self-assign in the same `169.254.0.0/16` range when DHCP is absent. On Windows the adapter shows **"Unidentified network — No internet"**; that's normal for a bare cable.
+3. Both ends now share a subnet: Ableton Link discovers the peer, the web config page answers at the address on the display, and OSC works on port 8000.
+
+Give the computer up to a minute to give up on DHCP and self-assign — `ipconfig` showing an *Autoconfiguration IPv4 Address* means it's ready.
+
+> **One self-assigned adapter at a time.** Link-local addresses don't identify *which* cable they live on, so if a computer has **several** network adapters in the self-assigned state at once (e.g. two direct cables to different devices), the OS can route the range out of only one of them and the others become unreachable. One direct cable per machine works flawlessly; for anything more elaborate — or any show rig where addresses must never change — use the static plan below.
+
+> OTA firmware updates are not available on a direct cable (no internet path).
+
+### Direct Ethernet — static IPs
+
+The managed alternative: both ends set to a fixed address. Addresses never change between sessions, which suits saved OSC configurations and multi-device rigs.
 
 Modern hardware (including the WT32-ETH01 and USB-to-Ethernet adapters) supports auto-MDIX, so a standard patch cable works — no crossover cable is required.
 
@@ -180,6 +194,30 @@ Modern hardware (including the WT32-ETH01 and USB-to-Ethernet adapters) supports
 The web config page is at **http://192.168.10.1**. Ableton Link and OSC work on the same address. The laptop's WiFi can remain connected to the internet independently.
 
 > Do not set the laptop gateway to an address outside the tapbox subnet — it will cause routing errors on that interface. Leaving the gateway blank or pointing it at the tapbox IP is safe.
+
+### Windows Firewall — letting Link through
+
+Ableton Link needs to *receive* UDP packets, and the Windows Firewall blocks unknown inbound traffic. The telltale symptom: you can ping tapbox and open its web page, but your Link app shows **0 peers** — or sees tapbox while tapbox's peers count stays at 0.
+
+Two things make this common:
+
+- Windows classifies a direct cable as an **"Unidentified network"** and applies the strict **Public** firewall profile, even if the app was already allowed on Private networks.
+- If the "allow access" prompt on an app's first run was ever cancelled, Windows silently created a **Block** rule that keeps winning on every network.
+
+**To allow your Link app (Ableton Live, MadMapper, …):**
+
+1. Press **Start**, type "firewall", open **Allow an app through Windows Firewall**.
+2. Click **Change settings** (needs administrator rights).
+3. Find your app in the list. Tick the checkbox on the **left of its name**, then tick both the **Private** and **Public** columns.
+4. Click **OK** and restart the app.
+
+Or as a single command in an **administrator** PowerShell (replace the name with the app's entry as it appears in the firewall list):
+
+```powershell
+Set-NetFirewallRule -DisplayName "Ableton Live 12 Trial" -Action Allow -Profile Private, Public
+```
+
+If the app is not in the list yet, launch it once, enable Link, and accept the firewall prompt — ticking **both** network types.
 
 ## Web Configuration
 
