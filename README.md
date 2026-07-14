@@ -32,6 +32,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 | Input | Two momentary push buttons (tap + select) |
 | Microphone | INMP441 I2S MEMS microphone (for Mic source) |
 | Line-in ADC | PCM1808 24-bit I2S stereo ADC breakout + 3.5 mm TRS socket (for Line source) |
+| Power / charging | TP4056 charger board with DC-DC step-up boost module — USB-C charging up to 1 A, charge/discharge protection, polarity protection |
 
 ### Pin Assignments
 
