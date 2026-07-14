@@ -32,7 +32,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 | Input | Two momentary push buttons (tap + select) |
 | Microphone | INMP441 I2S MEMS microphone (for Mic source) |
 | Line-in ADC | PCM1808 24-bit I2S stereo ADC breakout + 3.5 mm TRS socket (for Line source) |
-| Power / charging | Integrated lithium charge/discharge/boost module (often sold as "TP4056 boost module") — USB-C, three-stage charging at 1 A (configurable up to 2 A via resistor), 5 V boost output (configurable 5/9/12/15 V), automatic charge/discharge switching, charge/discharge/polarity protection, 35 µA quiescent current |
+| Power / charging | Integrated lithium charge/discharge/boost module (often sold as "TP4056 boost module") — USB-C, 1 A three-stage charging, 5 V boost output, automatic charge/discharge switching, charge/discharge/polarity protection, 35 µA quiescent current |
 
 ### Pin Assignments
 
