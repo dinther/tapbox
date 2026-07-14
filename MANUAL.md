@@ -221,6 +221,17 @@ Below the chart, a rolling 10-second count shows **beats seen vs beats that move
 
 The defaults work for typical four-on-the-floor material. For the full explanation of what each does and how to dial them in, see `BEAT_DETECTION.md`.
 
+#### Why the tempo never flickers — and never drifts
+
+There's a tension at the heart of every beat tracker. Audio analysis naturally jitters by a fraction of a BPM from beat to beat, so if you publish every reading, the tempo flickers across your whole rig — displays dance, devices chase noise. But if you smooth or ignore the small stuff, tiny errors should slowly *accumulate*: hold 126.3 while the music is really at 126.0 and the beat grid slides a little further off with every beat, until "beat 1" is audibly wrong.
+
+tapbox resolves this with two mechanisms that cover for each other:
+
+- **A steady tempo number.** Changes smaller than 0.4 BPM are ignored, so the BPM published to the Link session is rock solid — what you see on the display is what every peer sees, and none of them waste effort chasing estimation noise.
+- **A self-correcting beat grid.** While locked, every detected beat gently pulls the beat grid a small step toward where the music actually is. Drift from a tiny tempo mismatch adds a *fixed* amount per beat, but the correction grows with the gap — so instead of sliding away, the grid settles at a constant offset of a few milliseconds, inaudible and bounded, forever.
+
+The result is the best of both: a BPM number stable enough to trust on a big screen, and a beat grid that stays glued to the actual music indefinitely. Your downbeat is safe throughout — corrections always target the *nearest* beat, never re-guessing which beat is "1". That decision stays yours, made with your tap.
+
 ---
 
 ### Lan. — Network Mode
