@@ -24,8 +24,8 @@ Reading left to right:
 
 - **beat** — the current tempo in BPM (`120.0`), updated in real time when any device in the Link session adjusts it
 - **count** — which beat of the bar you are on right now (advances with the music)
-- **lock dot** — the decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio source listening but not yet stable; **off** = no lock
-- **source bar** — a single horizontal segment just after the count digit shows which sync source is active: **top = CDJ**, **middle = Manual**, **bottom = Audio**
+- **lock dot** — the decimal point on the count digit: **solid** = locked (CDJ active / audio stable / tap set); **blinking** = Mic or Line source listening but not yet stable; **off** = no lock
+- **source bar** — horizontal segments just after the count digit show which source is active: **top = CDJ**, **middle = Tap**, **bottom = Mic**, **top + bottom = Line**
 - **peers** — how many other Ableton Link peers are connected to the session
 
 On startup, tapbox joins the existing Link session tempo if one is already running, otherwise it starts at 120 BPM. You can tap a new tempo whenever you are ready.
@@ -52,13 +52,13 @@ After you are locked in, any further taps continue to refine the tempo. tapbox c
 
 ## Sync Sources
 
-tapbox can get its tempo three different ways. You pick one with the <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> menu item, and the active source is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio).
+tapbox can get its tempo four different ways. You pick one with the <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> menu item, and the active source is shown by a bar on the display (top = CDJ, middle = Tap, bottom = Mic, top + bottom = Line).
 
-### Manual (`tAP`)
+### Tap (`tAP`)
 
 Classic tap tempo, exactly as described above. You are in full control — tap four times to set the tempo and the downbeat.
 
-### Audio (`Aud`)
+### Mic (`Aud`)
 
 A small microphone listens to the room and works out the tempo for you, while **you** tap the downbeat. This is the hybrid mode: the machine handles the BPM, you handle the musical "beat 1".
 
@@ -69,7 +69,15 @@ How to use it:
 3. **Tap once on the beat** to accept the detected tempo and set the downbeat to that moment — or **tap four times** if you want to set the tempo yourself and let the mic refine it from there.
 4. The beat digit's decimal point **blinks** while the mic is searching for a stable lock, then goes **solid** once locked. From then on the tempo tracks the music automatically; a single tap any time re-aligns the downbeat without changing the tempo.
 
-The detector analyzes the full spectrum via an FFT/mel-filterbank pipeline rather than a single frequency band, so it isn't limited to a specific kick sound. The web config page's BPM tuning tab carries a live diagnostic chart plus four sliders that tune the detector's sensitivity to your mic and room, and how far you trust it to refine your tap — see **Audio Tuning** below, and the technical write-up in `BEAT_DETECTION.md` for how it works.
+The detector analyzes the full spectrum via an FFT/mel-filterbank pipeline rather than a single frequency band, so it isn't limited to a specific kick sound. The web config page's BPM tuning tab carries a live diagnostic chart plus four sliders that tune the detector's sensitivity to your source and room, and how far you trust it to refine your tap — see **Audio Tuning** below, and the technical write-up in `BEAT_DETECTION.md` for how it works.
+
+### Line (`LinE`)
+
+The same hybrid beat detection as Mic, but fed directly from the **3.5 mm line input** instead of the microphone — plug in a feed from your mixer (booth/aux/record out), a media player, or a phone.
+
+Everything works exactly as described for Mic: tap once to accept the detected tempo and set the downbeat, tap four times to override. The difference is the signal quality: line-in hears the music electrically, so there is no room noise, no chatter from the audience, and no acoustic delay between the speakers and a microphone. If a line feed is practical in your setup, prefer it over the mic — it locks faster and holds through quiet passages that would starve the microphone.
+
+Switching between Mic and Line resets the detector, so re-tap once after switching to re-anchor.
 
 ### CDJ (`Cdj`)
 
@@ -129,11 +137,11 @@ The config page is available at the device's IP address on port 80, from any bro
 
 ![Settings tab](docs/tapbox_web_config_settings.png)
 
-**Settings** (time signature, sync source, brightness) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
+**Settings** (time signature, source, brightness) — tap **Save Settings** to apply immediately. No reboot occurs; the device updates live and the page returns with a confirmation link.
 
 ![BPM tuning tab](docs/tapbox_web_config_BPM_tuner.png)
 
-**BPM tuning** — microphone beat-detector parameters plus a live chart of the microphone signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever Sync source isn't set to Audio, since these settings only affect audio detection.
+**BPM tuning** — audio beat-detector parameters plus a live chart of the incoming signal, described in full under **Audio Tuning** below. The whole tab greys out (controls disabled, chart dimmed) whenever the Source isn't Mic or Line, since these settings only affect audio detection.
 
 **Log** — a fourth, view-only tab: a live scrolling log of tap/arm/lock events, timestamped, useful for testing without a serial cable attached (e.g. watching tempo-tracking behavior while changing pitch/speed in DJ software). Only active while the tab is open in a browser — see `BEAT_DETECTION.md` for what's logged.
 
@@ -175,15 +183,16 @@ The display gives you a live preview as you change the value. In a dark venue, l
 
 ---
 
-### Src — Sync Source
+### Src — Source
 
-**What it does:** selects where tapbox gets its tempo. Three values:
+**What it does:** selects where tapbox gets its tempo. Four values:
 
 - <img src="docs/menu_value_cdj.png" alt="Cdj" height="26" valign="middle"> — Pioneer Pro DJ Link (see below)
 - <img src="docs/menu_value_aud.png" alt="Aud" height="26" valign="middle"> — audio beat detection from the microphone (you tap the downbeat)
+- `LinE` — audio beat detection from the 3.5 mm line input (you tap the downbeat)
 - <img src="docs/menu_value_tap.png" alt="tAP" height="26" valign="middle"> — manual tap tempo
 
-The active source is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio). See the **Sync Sources** section earlier in this manual for how each one works in practice.
+The active source is shown by a bar on the display (top = CDJ, middle = Tap, bottom = Mic, top + bottom = Line). See the **Sync Sources** section earlier in this manual for how each one works in practice.
 
 **About CDJ source:** when set to <img src="docs/menu_value_cdj.png" alt="Cdj" height="26" valign="middle">, tapbox listens on the same Ethernet switch as your CDJ players and reads their beat timing automatically. The active CDJ's BPM is fed directly into the Ableton Link session — all your Link peers follow the CDJ without any tapping. A `C` indicator confirms the lock. tapbox follows the lowest player number (1 → 2 → 3 → 4); if that player stops for more than two seconds it drops to the next. While a CDJ is actively driving the tempo, the tap button is ignored — the CDJ is in control. If no CDJ is present, CDJ source behaves like manual tap tempo.
 
@@ -195,9 +204,9 @@ The active source is shown by a bar on the display (top = CDJ, middle = Manual, 
 
 ### Audio Tuning
 
-The microphone beat-detector runs an FFT/mel-filterbank onset detector feeding a dynamic-programming beat tracker (`BTrack`) — see `BEAT_DETECTION.md` for the full pipeline. Your tap is always ground truth: the anchor tempo it sets never moves except by re-tapping. While `BTrack` is confident *and* its estimate is within your allowed BPM range of that anchor, the tempo follows it directly (so it responds to a pitch ride within a couple of beats); when confidence drops — silence, a breakdown, a beat-free passage — or the estimate strays outside the allowed range, the tempo holds its last good value until a beat clears every check again.
+These settings apply to both audio sources — Mic and Line — whichever is active. The beat detector runs an FFT/mel-filterbank onset detector feeding a dynamic-programming beat tracker (`BTrack`) — see `BEAT_DETECTION.md` for the full pipeline. Your tap is always ground truth: the anchor tempo it sets never moves except by re-tapping. While `BTrack` is confident *and* its estimate is within your allowed BPM range of that anchor, the tempo follows it directly (so it responds to a pitch ride within a couple of beats); when confidence drops — silence, a breakdown, a beat-free passage — or the estimate strays outside the allowed range, the tempo holds its last good value until a beat clears every check again.
 
-What counts as "confident enough," how loud a sound has to be to count as a beat at all, and how far you trust audio sensing to refine your tap all vary with your mic, your room, and how much you want the mic doing — so four parameters on the **web config page**'s BPM tuning tab control them directly:
+What counts as "confident enough," how loud a sound has to be to count as a beat at all, and how far you trust audio sensing to refine your tap all vary with your source, your room, and how much you want the detector doing — so four parameters on the **web config page**'s BPM tuning tab control them directly. (Line-in is electrically clean — no room noise — so it typically needs no Level floor at all; the floor mainly earns its keep on the microphone.)
 
 - **Level floor** (dB, off by default): an absolute loudness floor. Without it, a completely silent room can still produce confident "beats" from something as quiet as keyboard typing, because the detector measures *relative* spectral change, not loudness. Watch the **Level** readout under the chart while music plays and while the room is quiet, then set the floor between the two — the readout is smoothed, so it settles rather than jumping around, but at low listening volumes the gap between "room" and "music" can be narrow; a louder room gives you more margin.
 - **Lock confidence** (0.00–1.00, default 0.30): how confident `BTrack` must be for a beat to keep the sync **lock** alive and keep the beat grid phase-aligned. Lower this if the "LOCKED" state keeps dropping out on a quiet or reverberant mic signal.
@@ -266,7 +275,7 @@ To cancel: press **tap**, hold **select** for 1 second, or wait 6 seconds — ta
 
 Open the menu, then hold both the **tap button** and the **select button** for **8 seconds**. You will see <img src="docs/confirm_ota_hold.png" alt="UPd.----" height="26" valign="middle"> at 3 seconds and then <img src="docs/confirm_reset_confirm.png" alt="rSet Yes" height="26" valign="middle"> at 8 seconds. Release the buttons.
 
-Press **select** to confirm. tapbox resets all settings to factory defaults — sync source to Audio, time signature to 4, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
+Press **select** to confirm. tapbox resets all settings to factory defaults — source to Mic, time signature to 4, brightness to 2, network to Auto, static address to 192.168.1.200 / 255.255.255.0 / 192.168.1.1 — clears any stored WiFi SSID and password, and reboots.
 
 To cancel: press nothing (or press tap). The display returns to normal after 6 seconds without resetting anything.
 
@@ -293,7 +302,7 @@ tapbox listens for OSC messages on **UDP port 8000**. Send your messages to the 
 - Use `/downbeat` at the top of a new section to re-align the beat grid after a break.
 - Assign `/nudge 40` and `/nudge -40` to fader buttons on a mixing desk for a decisive push/pull, or `/nudge 5` / `/nudge -5` for fine phase correction.
 
-**Nudge notes:** a nudge shifts the shared Link timeline itself, so every connected app sees its beat grid move — it's not local to tapbox. In **Audio source while locked**, the microphone owns phase alignment: its phase-lock will pull the grid back onto the detected beats within a few beats, undoing the nudge. Nudge is therefore most useful with the CDJ and Manual sources; with Audio, re-tap the downbeat instead.
+**Nudge notes:** a nudge shifts the shared Link timeline itself, so every connected app sees its beat grid move — it's not local to tapbox. With a **Mic or Line source locked**, the beat detector owns phase alignment: its phase-lock will pull the grid back onto the detected beats within a few beats, undoing the nudge. Nudge is therefore most useful with the CDJ and Tap sources; with Mic or Line, re-tap the downbeat instead.
 
 ---
 

@@ -132,7 +132,7 @@ module case_base(){
         translate([29.0,4.15,38.8]) cube([17.1, 83, 20], center=true);
         
         //  Flat area for menu button
-        translate([29.0,-40,44.5]) cube([17, 14, 20], center=true);
+        translate([29.0,-40,44.0-0.7]) cube([17, 14, 20], center=true);
         
         //  Mounting holes for Display board
         translate([29, 2.15,31]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module_holes();
@@ -228,7 +228,7 @@ module lid(){
         translate([-10,0,-1]) cylinder(d=36, h=2 - 0.3 + 1);
         
         //  menu button cutout
-        translate([29,-38,-0.8]) menu_switch(cut=true); 
+        translate([29,-38, 0]) menu_switch(cut=true); 
      
         //  Display cover cutout
         translate([29,2.2,6-2]) rotate([0,0,90]) round_rounded_cube(width=67, length=21, height=5, corner_radius=2.5, bottom_edge_radius=0.1, top_edge_radius=0.1);  
@@ -285,11 +285,13 @@ module battery(radius=26.3){
 
 module menu_switch(cut=false){
     d = cut? 7.3 : 6.7;
+    h1 = cut? 3.7 : 3.5;
     h = cut? 10 : 3.6;
-    s = cut? 12.15 : 12;
+    s = cut? 12.10 : 12;
     g = cut? 0.2 : 0; //  Gap between round and square bit makes pringint easier. Scrificial layer technique
-    translate([0,0,3.1*0.5]) cube([s,s,3.1], center=true);
-    translate([0,0,3.1+ g]) cylinder(d=d, h=h);
+    translate([-s*0.5,-s*0.5,0]) cube([s,s,h1]);
+    if (cut) translate([0,0,0.5]) cube([s+7,s,1], center=true);
+    translate([0,0,h1+ g]) cylinder(d=d, h=h);
 }
 
 module wt32_bracket(){
@@ -332,7 +334,7 @@ module 26650_battery_bulkhead(marker="", slot = true){
     fw = 2.6;
     sw = 1.4;
     ss = 6;
-    nw = 0.2;
+    nw = 0.6;
     
     spring_plate = 7.8;
     nub_plate = 1.5;

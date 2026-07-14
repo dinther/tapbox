@@ -8,9 +8,10 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 
 ## Features
 
-- **Three sync sources** — **Manual** (tap tempo), **Audio** (microphone auto-detects BPM, you tap the downbeat), and **CDJ** (Pioneer Pro DJ Link). Chosen with the <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> menu item; the active source is shown by a bar on the display (top = CDJ, middle = Manual, bottom = Audio)
-- **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session (Manual source)
-- **Audio beat detection** — an INMP441 I2S microphone listens to the room and refines the tempo automatically via an FFT/mel-filterbank onset detector and a dynamic-programming beat tracker (`BTrack`), within a tunable BPM range of your tap — your tap is always ground truth; the mic can never wander off on its own. → [How beat detection works](BEAT_DETECTION.md)
+- **Four sources** — **Tap** (manual tap tempo), **Mic** (microphone auto-detects BPM, you tap the downbeat), **Line** (same detection from a 3.5 mm line-level input), and **CDJ** (Pioneer Pro DJ Link). Chosen with the <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> menu item; the active source is shown by a bar on the display (top = CDJ, middle = Tap, bottom = Mic, top + bottom = Line)
+- **Tap tempo** — tap 4 times to lock in BPM and phase-align to the Link session (Tap source)
+- **Audio beat detection** — an INMP441 I2S microphone listens to the room and refines the tempo automatically via an FFT/mel-filterbank onset detector and a dynamic-programming beat tracker (`BTrack`), within a tunable BPM range of your tap — your tap is always ground truth; the detector can never wander off on its own. → [How beat detection works](BEAT_DETECTION.md)
+- **Line-in beat detection** — a PCM1808 24-bit stereo ADC feeds a 3.5 mm line-level signal (mixer booth/aux out, media player, phone) into the same detector — no room noise, no mic-to-speaker acoustic delay
 - **Pioneer CDJ sync** — passively listens for Pro DJ Link beat packets on the same network; bridges CDJ tempo directly into the Ableton Link session
 - **Ableton Link** — joins the Link network automatically on boot; peers shown on display
 - **Two-button control** — tap button for tempo and menu navigation; select button for confirm/back
@@ -29,7 +30,8 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 | MCU / Ethernet | WT32-ETH01 (ESP32 + LAN8720A) |
 | Display | MAX7219 8-digit 7-segment module |
 | Input | Two momentary push buttons (tap + select) |
-| Microphone | INMP441 I2S MEMS microphone (for Audio source) |
+| Microphone | INMP441 I2S MEMS microphone (for Mic source) |
+| Line-in ADC | PCM1808 24-bit I2S stereo ADC breakout + 3.5 mm TRS socket (for Line source) |
 
 ### Pin Assignments
 
@@ -43,8 +45,14 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 | IO14 | MAX7219 CLK |
 | IO2  | MAX7219 DIN |
 | IO15 | MAX7219 LOAD/CS |
+| IO5  | PCM1808 SCKI — 8 MHz system clock, LEDC-generated (silk `RXD`) |
+| IO17 | PCM1808 BCK — I2S bit clock, PCM1808-generated (silk `TXD`) |
+| IO32 | PCM1808 LRC — I2S word clock, PCM1808-generated (silk `CFG`) |
+| IO33 | PCM1808 OUT — I2S data in (silk `485_EN`) |
 
 INMP441 wiring: **VDD → 3.3 V**, **GND → GND**, **L/R → GND** (selects the left channel), plus SCK/WS/SD as above.
+
+PCM1808 wiring: **+5 V and 3.3 V** supplies (this breakout has no onboard regulator), **MD0 → 3.3 V**, **MD1 → 3.3 V** (Master mode, 256fs → 31.25 kHz sampling), **FMT → GND** (I²S format; silk-labelled `PMT` on some boards), **SCK ← IO5**, plus BCK/LRC/OUT as above. The PCM1808 masters the I2S bus; the ESP32 receives as a slave. 3.5 mm socket: **tip → LIN**, **ring → RIN**, **sleeve → the analog GND pin between LIN and RIN**.
 
 > GPIO 0, 16, 18, 19, 21, 22, 23, 25, 26, 27 are used by the onboard Ethernet — do not reassign.  
 > GPIO 34–39 are input-only with **no internal pull-up** — the tap/select buttons on IO35/IO39 therefore require external pull-ups.  
@@ -55,9 +63,9 @@ INMP441 wiring: **VDD → 3.3 V**, **GND → GND**, **L/R → GND** (selects the
 ![Display layout](docs/display.png)
 
 - **beat** — current BPM, four digits with decimal point (`120.0`)
-- **source bar** — single horizontal segment: **top = CDJ**, **middle = Tap only**, **bottom = Audio**
+- **source bar** — horizontal segments: **top = CDJ**, **middle = Tap**, **bottom = Mic**, **top + bottom = Line**
 - **count** — beat position in the bar (1–4, or up to your time signature)
-- **lock dot** — decimal point on the count digit: **solid** = locked (CDJ active / mic stable / tap set); **blinking** = Audio source searching; **off** = no lock
+- **lock dot** — decimal point on the count digit: **solid** = locked (CDJ active / audio stable / tap set); **blinking** = Mic or Line source searching; **off** = no lock
 - **peers** — number of other Ableton Link peers on the network
 
 **Menu mode:**
@@ -84,13 +92,13 @@ Value flashes at 4 Hz in edit mode.
 |-------|---------|--------|
 | <img src="docs/menu_glyph_beat.png" alt="Beat" height="26" valign="middle"> | Time signature | 2, 3, 4, 5, 6, 7 |
 | <img src="docs/menu_glyph_led.png" alt="Led" height="26" valign="middle"> | Display brightness | 1 – 4 (live preview) |
-| <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> | Sync source | <img src="docs/menu_value_cdj.png" alt="Cdj" height="26" valign="middle"> · <img src="docs/menu_value_aud.png" alt="Aud" height="26" valign="middle"> (audio) · <img src="docs/menu_value_tap.png" alt="tAP" height="26" valign="middle"> (manual) |
+| <img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> | Source | <img src="docs/menu_value_cdj.png" alt="Cdj" height="26" valign="middle"> · <img src="docs/menu_value_aud.png" alt="Aud" height="26" valign="middle"> (mic) · `LinE` (line-in) · <img src="docs/menu_value_tap.png" alt="tAP" height="26" valign="middle"> (tap) |
 | <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> | Network mode | <img src="docs/menu_value_auto.png" alt="Auto" height="26" valign="middle"> (DHCP) · <img src="docs/menu_value_stat.png" alt="Stat" height="26" valign="middle"> (static) · <img src="docs/menu_value_ap.png" alt="  AP" height="26" valign="middle"> (WiFi access point) |
 | <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> | Current IP address | read-only; shows last octet; press **select** to scroll full IP across display |
 | <img src="docs/menu_glyph_ver.png" alt="vEr" height="26" valign="middle"> | Firmware version | read-only; shows major.minor.patch |
 | <img src="docs/menu_glyph_done.png" alt="done" height="26" valign="middle"> | Exit menu | returns to normal mode |
 
-<img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> selects the sync source. The mic-tuning parameters that tune the audio beat detector, plus the static IP address, subnet mask, and gateway, are **web-only** (Network and BPM tuning tabs on the web config page, not on-device menu items) — see [BEAT_DETECTION.md](BEAT_DETECTION.md).  
+<img src="docs/menu_glyph_src.png" alt="Src" height="26" valign="middle"> selects the source. The tuning parameters for the audio beat detector (shared by the Mic and Line sources), plus the static IP address, subnet mask, and gateway, are **web-only** (Network and BPM tuning tabs on the web config page, not on-device menu items) — see [BEAT_DETECTION.md](BEAT_DETECTION.md).  
 Changing the network mode reboots after a 2-second `bOOt` display.  
 <img src="docs/menu_glyph_addr.png" alt="Addr" height="26" valign="middle"> is read-only. Navigating to it shows the last octet of the current IP as a quick reference; pressing **select** scrolls the full IP address across the display.  
 Menu times out after 6 seconds of inactivity without saving. The menu resumes at the last-visited item when re-opened.
@@ -181,7 +189,7 @@ The config page at `http://<tapbox-ip>` is accessible from any browser over Ethe
 | Tab | Fields | Button | Effect |
 |-----|--------|--------|--------|
 | Network | WiFi SSID/password, Ethernet mode, static IP/subnet/gateway | Save Network — tapbox will reboot | Saves and reboots |
-| Settings | Time signature, sync source, brightness | Save Settings | Saves and applies live — no reboot |
+| Settings | Time signature, source, brightness | Save Settings | Saves and applies live — no reboot |
 | BPM tuning | Level floor, lock confidence, move confidence, BPM range, plus a live confidence chart | Save Tuning | Applies live as you drag; see [BEAT_DETECTION.md](BEAT_DETECTION.md) |
 | Log | Live scrolling log of tap/arm/lock events over the same WebSocket the chart uses — no controls, view-only | — | — |
 

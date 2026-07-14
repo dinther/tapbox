@@ -12,6 +12,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/i2s_std.h"
 #include "esp_https_ota.h"
 #include "esp_crt_bundle.h"
@@ -42,9 +43,14 @@
 #define PIN_I2S_WS      GPIO_NUM_12  // INMP441 WS  (strapping pin; eFuse-locked on WT32-ETH01)
 #define PIN_I2S_DIN     GPIO_NUM_36  // INMP441 SD  (was battery ADC)
 #define MIC_SAMPLE_RATE 32000
+#define PIN_LINE_SCKI   GPIO_NUM_5   // PCM1808 SCKI — LEDC 8MHz (see PCM1808_PLAN.md)
+#define PIN_LINE_BCK    GPIO_NUM_17  // PCM1808 BCK  (2MHz, PCM1808-generated → input)
+#define PIN_LINE_WS     GPIO_NUM_32  // PCM1808 LRC  (31.25kHz, PCM1808-generated → input)
+#define PIN_LINE_DIN    GPIO_NUM_33  // PCM1808 OUT  (audio data → input)
+#define LINE_SAMPLE_RATE 31250       // 8MHz SCKI ÷ 256fs
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-#define DEBOUNCE_MS     5
+#define DEBOUNCE_MS     20  // lockout after an accepted edge; Sanwa OBSF release chatter exceeds the old 5ms
 #define DISPLAY_MS      50
 #define MENU_TIMEOUT_MS 6000
 #define LONG_PRESS_MS   2000
@@ -61,6 +67,7 @@ static constexpr uint8_t CH_d = 0x3D;
 static constexpr uint8_t CH_e = 0x6F;
 static constexpr uint8_t CH_h = 0x17;
 static constexpr uint8_t CH_I = 0x30;
+static constexpr uint8_t CH_i = 0x10;  // lowercase i: segment C only
 static constexpr uint8_t CH_L = 0x0E;
 static constexpr uint8_t CH_o = 0x1D;
 static constexpr uint8_t CH_n = 0x15;
@@ -81,7 +88,7 @@ static constexpr uint8_t BAR_BOT = 0x08;  // segment D  → Audio mode
 
 // ── Firmware version ───────────────────────────────────────────────────────────
 #define FW_MAJOR 1
-#define FW_MINOR 12
+#define FW_MINOR 13
 #define FW_PATCH 0
 
 // ── Menu option tables ─────────────────────────────────────────────────────────
@@ -93,14 +100,19 @@ static const int    kSigCount     = 6;
 static const int    kBritLevels[] = { 1, 5, 10, 15 };  // user levels 1-4 → MAX7219 intensity
 static const int    kBritCount    = 4;
 
-// ── Sync mode (mutually exclusive) ──────────────────────────────────────────────
-enum SyncMode { MODE_CDJ = 0, MODE_AUDIO = 1, MODE_MANUAL = 2 };
+// ── Sync source (mutually exclusive) ────────────────────────────────────────────
+// Values are NVS-persisted — append only, never renumber (a stored 2 must stay
+// tap mode across upgrades). MODE_LINE (PCM1808 line-in) appended 2026-07-14.
+enum SyncMode { MODE_CDJ = 0, MODE_MIC = 1, MODE_MANUAL = 2, MODE_LINE = 3 };
+// Mic and Line-in are both "audio" sources: same tap-anchor/range-gate/lock
+// behavior, different capture hardware and sample rate.
+static inline bool mode_is_audio(int m) { return m == MODE_MIC || m == MODE_LINE; }
 
 // ── Persistent settings ────────────────────────────────────────────────────────
 static int g_sigIdx   = 2;             // kSignatures[2] = 4/4
 static int g_brit     = 1;             // brightness level index 0–3 (→ kBritLevels)
 static int g_net      = 0;             // 0=DHCP, 1=static
-static int g_mode     = MODE_AUDIO;    // 0=CDJ, 1=Audio (mic), 2=Manual
+static int g_mode     = MODE_MIC;    // 0=CDJ, 1=Mic, 2=Tap (manual), 3=Line-in
 // Mic tuning knobs — the real tempo path's four gates (see mic_task),
 // exposed as sliders because none are derivable analytically.
 static int g_micFloor    = -100;       // absolute level floor, dB of mean FFT power (-100 = off, up to -10)
@@ -155,6 +167,7 @@ static volatile bool g_cdj_active = false;  // set by cdj_task; read by display 
 
 // ── Mic / beat-detection runtime state ──────────────────────────────────────────
 static i2s_chan_handle_t s_i2s_rx     = nullptr;
+static i2s_chan_handle_t s_i2s_line   = nullptr;  // PCM1808 line-in (slave RX, I2S1)
 static volatile double   g_mic_bpm    = 0.0;    // last raw detected BPM (display hint)
 static volatile bool     g_mic_locked = false;  // mic has a stable tracked BPM
 static volatile bool     g_mic_armed  = false;  // a tap has anchored the tracker
@@ -260,7 +273,7 @@ static void nvs_load_settings() {
     int32_t v;
     if (nvs_get_i32(h, "sig",  &v) == ESP_OK && v >= 0 && v < kSigCount)   g_sigIdx   = (int)v;
     if (nvs_get_i32(h, "brit", &v) == ESP_OK && v >= 0 && v <= 3)          g_brit     = (int)v;
-    if (nvs_get_i32(h, "mode", &v) == ESP_OK && v >= 0 && v <= 2)          g_mode     = (int)v;
+    if (nvs_get_i32(h, "mode", &v) == ESP_OK && v >= 0 && v <= 3)          g_mode     = (int)v;
     if (nvs_get_i32(h, "mfloor",&v)== ESP_OK && v >= -100 && v <= -10)     g_micFloor = (int)v;
     if (nvs_get_i32(h, "mcsil",&v) == ESP_OK && v >= 0 && v <= 100)        g_micConfSil  = (int)v;
     if (nvs_get_i32(h, "mcmove",&v)== ESP_OK && v >= 0 && v <= 100)        g_micConfMove = (int)v;
@@ -314,7 +327,7 @@ static void nvs_save_settings() {
 }
 
 static void factory_reset() {
-    g_sigIdx = 2; g_brit = 1; g_mode = MODE_AUDIO;
+    g_sigIdx = 2; g_brit = 1; g_mode = MODE_MIC;
     g_micFloor = -100; g_micConfSil = 30; g_micConfMove = 60; g_micRange = 6;
     g_net = 0;
     g_ip[0] = 192; g_ip[1] = 168; g_ip[2] =   1; g_ip[3] = 200;
@@ -367,7 +380,7 @@ static int menu_val_max(int item) {
     switch (item) {
         case MENU_SIG:   return kSigCount - 1;
         case MENU_BRIT:  return kBritCount - 1;
-        case MENU_MODE:  return 2;
+        case MENU_MODE:  return 3;
         case MENU_NET:   return 2;
         default: return 0;
     }
@@ -413,10 +426,13 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
             render_int3(segs, val + 1);  // show 1-4 (user level)
             break;
         case MENU_MODE:
-            // 3-char value, right-justified: CdJ / Aud / tAP
-            if (val == MODE_CDJ)       { segs[5] = CH_C; segs[6] = CH_d; segs[7] = CH_J; }
-            else if (val == MODE_AUDIO){ segs[5] = CH_A; segs[6] = CH_u; segs[7] = CH_d; }
-            else                       { segs[5] = CH_t; segs[6] = CH_A; segs[7] = CH_P; }
+            // CdJ / Aud / tAP (3-char right-justified); LinE fills pos 4-7
+            // like the Lan. values. ("Mic" can't render on 7-seg — no M —
+            // so the mic source keeps the Aud glyph.)
+            if (val == MODE_CDJ)      { segs[5] = CH_C; segs[6] = CH_d; segs[7] = CH_J; }
+            else if (val == MODE_MIC) { segs[5] = CH_A; segs[6] = CH_u; segs[7] = CH_d; }
+            else if (val == MODE_LINE){ segs[4] = CH_L; segs[5] = CH_i; segs[6] = CH_n; segs[7] = CH_e; }
+            else                      { segs[5] = CH_t; segs[6] = CH_A; segs[7] = CH_P; }
             break;
         case MENU_NET:
             // 4-char value fills positions 4-7, overriding the blank separator
@@ -505,15 +521,17 @@ static void update_display() {
             segs[3] = MAX7219Display::digit(tenths);
             // Lock dot on beat digit: solid=locked, blinking=Audio searching, blank=inactive
             bool locked_state = (g_mode == MODE_CDJ    && g_cdj_active)
-                             || (g_mode == MODE_AUDIO  && g_mic_locked)
+                             || (mode_is_audio(g_mode) && g_mic_locked)
                              || (g_mode == MODE_MANUAL && g_manual_locked);
-            bool searching    = (g_mode == MODE_AUDIO && g_mic_armed && !g_mic_locked);
+            bool searching    = (mode_is_audio(g_mode) && g_mic_armed && !g_mic_locked);
             bool dot = locked_state || (searching && (now_us() / 250000ULL) % 2 == 0);
             segs[5] = MAX7219Display::digit((int)floor(phase) + 1) | (dot ? MAX7219Display::SEG_DP : 0);
             // Persistent mode bar (top=CDJ, middle=Manual, bottom=Audio) — placed
             // behind the beat counter so the counter's left side stays clean.
-            segs[6] = (g_mode == MODE_CDJ) ? BAR_TOP
-                    : (g_mode == MODE_MANUAL) ? BAR_MID : BAR_BOT;
+            segs[6] = (g_mode == MODE_CDJ)    ? BAR_TOP
+                    : (g_mode == MODE_MANUAL) ? BAR_MID
+                    : (g_mode == MODE_LINE)   ? (uint8_t)(BAR_TOP | BAR_BOT)
+                    :                           BAR_BOT;
             segs[7] = MAX7219Display::digit(peers > 9 ? 9 : peers);
         }
         display.setSegments(segs);
@@ -945,9 +963,11 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         httpd_resp_sendstr_chunk(req, tmp);
     }
     httpd_resp_sendstr_chunk(req, "</select>");
-    httpd_resp_sendstr_chunk(req, "<label>Sync mode</label><select name=mode onchange=\"updEnable()\">");
-    static const char *modes[] = {"CDJ", "Audio (mic)", "Manual"};
-    for (int i = 0; i < 3; i++) {
+    httpd_resp_sendstr_chunk(req, "<label>Source</label><select name=mode onchange=\"updEnable()\">");
+    static const char *modes[] = {"CDJ", "Mic", "Tap", "Line"};
+    static const int   modeOrder[] = {0, 1, 3, 2};  // dropdown lists Line before Tap
+    for (int k = 0; k < 4; k++) {
+        int i = modeOrder[k];
         snprintf(tmp, sizeof(tmp), "<option value=%d%s>%s</option>",
             i, i == g_mode ? " selected" : "", modes[i]);
         httpd_resp_sendstr_chunk(req, tmp);
@@ -970,7 +990,7 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "<form method=post action=/apply>"
         "<h3>BPM Tuning</h3>"
         "<div id=mnote class=mnum style=\"display:none;color:#e90\">"
-        "Audio sync is off &mdash; set Sync mode to Audio on the Settings tab</div>"
+        "Audio sync is off &mdash; set Source to Mic or Line on the Settings tab</div>"
         "<div id=mtop>"
         "<div class=mbig><div id=mtapv>&hellip;</div><span>Tap BPM</span></div>"
         "<div class=mbig><div id=mrawv>&hellip;</div><span>Audio BPM</span></div>"
@@ -1048,7 +1068,8 @@ static esp_err_t http_get_root(httpd_req_t *req) {
         "function updEnable(){"
           "var st=document.querySelector('[name=net]').value=='1';"
           "['ip','sn','gw'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!st;});"
-          "var au=document.querySelector('[name=mode]').value=='1';"
+          "var mv=document.querySelector('[name=mode]').value;"
+          "var au=(mv=='1'||mv=='3');"
           "['mfloor','mcsil','mcmove','mrange'].forEach(function(n){document.querySelector('[name='+n+']').disabled=!au;});"
           "mrst.disabled=!au;"
           "mchart.style.opacity=au?1:.35;"
@@ -1214,7 +1235,7 @@ static esp_err_t http_post_apply(httpd_req_t *req) {
 
     char tmp[64];
     if (form_field(body, "sig",  tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v < kSigCount)   g_sigIdx   = v; }
-    if (form_field(body, "mode", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 2)          g_mode     = v; }
+    if (form_field(body, "mode", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 3)          g_mode     = v; }
     if (form_field(body, "brit", tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 3)           g_brit     = v; }
     if (form_field(body, "mfloor",tmp,sizeof(tmp))) { int v = atoi(tmp); if (v >= -100 && v <= -10)       g_micFloor = v; }
     if (form_field(body, "mcsil",tmp, sizeof(tmp))) { int v = atoi(tmp); if (v >= 0 && v <= 100)          g_micConfSil  = v; }
@@ -1322,22 +1343,34 @@ static void ws_log(const char *fmt, ...) {
 // has the audio-tuning chart open — cheap to compute, so runs unconditionally
 // and just does nothing while no client is connected.
 static void ws_push_task(void *) {
+    abl_link_session_state ws_sess = abl_link_create_session_state();
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(50));
         if (!ws_client_connected()) continue;
         WsPushArg *a = (WsPushArg *)malloc(sizeof(WsPushArg));
         if (!a) continue;
-        // levelDb,confidence,beat(0/1/2/3),rawBPM,trackedBPM,state,seen,moved,anchorBPM,beatAgeMs
+        // levelDb,confidence,beat(0/1/2/3),rawBPM,linkBPM,state,seen,moved,tapBPM,beatAgeMs
         // beat: 0=none 1=lock-tier 2=move-tier 3=predicted-but-REJECTED (floor gate)
+        // linkBPM is the real session tempo (any mode), not g_mic_tracked —
+        // the page labels it "Link BPM" and Manual/CDJ taps move Link too.
+        // tapBPM: audio mode shows the range-gate anchor; other modes show
+        // the classic tap tempo once a 4-tap session has set it.
+        double linkBpm = 0.0;
+        if (linkEnabled) {
+            abl_link_capture_app_session_state(s_link, ws_sess);
+            linkBpm = abl_link_tempo(ws_sess);
+        }
+        double tapBpm = mode_is_audio(g_mode) ? (double)g_mic_tapAnchor
+                      : (g_manual_locked ? tapTempo.bpm() : 0.0);
         uint32_t age = g_tele_onset ? (now_ms() - g_tele_onsetMs) : 0;
         if (age > 99) age = 99;
         snprintf(a->text, sizeof(a->text), "%.1f,%.2f,%d,%.1f,%.1f,%d,%u,%u,%.1f,%u",
                  (double)g_tele_level, (double)g_tele_conf,
                  (int)g_tele_onset,
-                 (double)g_mic_bpm, (double)g_mic_tracked,
+                 (double)g_mic_bpm, linkBpm,
                  g_mic_locked ? 2 : (g_mic_armed ? 1 : 0),
                  (unsigned)(g_tele_det % 100000), (unsigned)(g_tele_acc % 100000),
-                 (double)g_mic_tapAnchor, (unsigned)age);
+                 tapBpm, (unsigned)age);
         g_tele_onset = 0;  // consume the latched beat (0=none 1=lock-tier 2=move-tier 3=rejected)
         if (httpd_queue_work(s_httpd, ws_send_async, a) != ESP_OK) free(a);
     }
@@ -1547,7 +1580,7 @@ static void do_tap() {
 
     TapResult r = tapTempo.tap();
 
-    if (g_mode == MODE_AUDIO) {
+    if (mode_is_audio(g_mode)) {
         // Audio mode: the mic supplies tempo, the tap supplies the downbeat.
         // bpmChanged (4+ taps) covers both the first go-live AND every later
         // re-tap; wentLive only fires once ever, so we must use bpmChanged.
@@ -2002,14 +2035,14 @@ static void print_status() {
     lastPrint = now;
     if (!linkEnabled) { printf("Cold start — tap 4 times to go live\n"); return; }
     abl_link_capture_app_session_state(s_link, s_session);
-    static const char *kModeStr[] = { "CDJ", "Audio", "Manual" };
+    static const char *kModeStr[] = { "CDJ", "Mic", "Tap", "Line" };
     printf("Link: %.2f BPM  sig: %.0f  peers: %llu  eth: %s  mode: %s%s\n",
            abl_link_tempo(s_session), linkQuantum,
            (unsigned long long)abl_link_num_peers(s_link),
            ethConnected ? ethIPStr : "disconnected",
            kModeStr[g_mode],
            (g_mode == MODE_CDJ && g_cdj_active) ? " (cdj active)"
-           : (g_mode == MODE_AUDIO && g_mic_locked) ? " (mic locked)" : "");
+           : (mode_is_audio(g_mode) && g_mic_locked) ? " (audio locked)" : "");
 }
 
 // ── GPIO init ──────────────────────────────────────────────────────────────────
@@ -2060,6 +2093,77 @@ static void init_i2s_mic() {
     }
 }
 
+// ── PCM1808 line-in, Phase 1: master clock only (see PCM1808_PLAN.md) ─────────
+// 8MHz SCKI for the PCM1808 via LEDC: 80MHz APB ÷ (divider 5 × 2¹) — an exact
+// integer divider, so zero cycle-to-cycle jitter (a fractional LEDC divider
+// alternates two periods, and SCKI jitter degrades the ADC per its datasheet).
+// The PCM1808 is strapped Master/256fs (MD0=H, MD1=H) and derives BCK (2MHz)
+// and LRCK (fs = 31.25kHz) from this clock itself; until LEDC starts, a static
+// SCKI simply holds the chip in its clock-halt power-down state.
+static void line_clock_start() {
+    ledc_timer_config_t tcfg = {};
+    tcfg.speed_mode      = LEDC_HIGH_SPEED_MODE;
+    tcfg.duty_resolution = LEDC_TIMER_1_BIT;
+    tcfg.timer_num       = LEDC_TIMER_1;
+    tcfg.freq_hz         = 8000000;
+    tcfg.clk_cfg         = LEDC_USE_APB_CLK;
+    if (ledc_timer_config(&tcfg) != ESP_OK) {
+        printf("Line-in: LEDC timer config failed\n");
+        return;
+    }
+    ledc_channel_config_t ccfg = {};
+    ccfg.gpio_num   = PIN_LINE_SCKI;
+    ccfg.speed_mode = LEDC_HIGH_SPEED_MODE;
+    ccfg.channel    = LEDC_CHANNEL_0;
+    ccfg.timer_sel  = LEDC_TIMER_1;
+    ccfg.duty       = 1;  // 50% at 1-bit resolution
+    ccfg.hpoint     = 0;
+    if (ledc_channel_config(&ccfg) != ESP_OK) {
+        printf("Line-in: LEDC channel config failed\n");
+        return;
+    }
+    printf("Line-in: 8MHz SCKI running on IO5\n");
+}
+
+// ── PCM1808 line-in, Phase 3: I2S slave RX + level diagnostics ────────────────
+// The PCM1808 masters the bus (BCK/LRCK are ITS outputs), so the ESP32's
+// second I2S port runs as a slave receiver — slave pins route through the
+// GPIO matrix, any GPIO works. Same 24-in-32-bit Philips framing as the
+// PCM1808 emits (64 BCK/frame = two 32-bit slots; the 24 data bits sit at
+// the top of each slot, which the /2^31 normalization absorbs).
+// mic_task is the sole reader: it consumes whichever channel (mic I2S0 /
+// line I2S1) the Source setting selects — see the srcLine switch there.
+// (Phase 3's separate line_task diagnostic was folded into mic_task when
+// Phase 4 routed line-in into the beat pipeline.)
+static void init_i2s_line() {
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_SLAVE);
+    if (i2s_new_channel(&chan_cfg, nullptr, &s_i2s_line) != ESP_OK) {
+        printf("Line-in: I2S channel alloc failed\n");
+        s_i2s_line = nullptr;
+        return;
+    }
+    i2s_std_config_t std_cfg = {
+        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(LINE_SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = PIN_LINE_BCK,
+            .ws   = PIN_LINE_WS,
+            .dout = I2S_GPIO_UNUSED,
+            .din  = PIN_LINE_DIN,
+            .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
+        },
+    };
+    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
+    if (i2s_channel_init_std_mode(s_i2s_line, &std_cfg) != ESP_OK ||
+        i2s_channel_enable(s_i2s_line) != ESP_OK) {
+        printf("Line-in: I2S init/enable failed\n");
+        s_i2s_line = nullptr;
+        return;
+    }
+    printf("Line-in: I2S slave RX on BCK=IO17 WS=IO32 DIN=IO33\n");
+}
+
 // FFT-based spectral-flux onset detector + autocorrelation BPM tracker, with
 // tap-anchored, slew-limited BPM application onto Ableton Link. DSP core
 // ported (basic tier) from absent42/esphome-audio-reactive (MIT). See
@@ -2103,7 +2207,7 @@ static void mic_task(void *) {
 
     uint32_t lastOnset = 0, lastDbg = 0, lastPollMs = 0;
     int      consec   = 0;
-    bool     wasAudio  = (g_mode == MODE_AUDIO);
+    bool     wasAudio  = mode_is_audio(g_mode);
     // Latches true if BTrack predicted a beat on ANY hop since the last 20Hz
     // poll below — the fast hop loop (62.5Hz) overwrites latestBTrackResult
     // every iteration, so reading its beat_event directly at poll time would
@@ -2120,19 +2224,63 @@ static void mic_task(void *) {
     // checks (beatLevelDb, below) and what the web page displays (g_tele_level).
     float    levelEmaDb      = -120.f;
 
+    // Which capture source feeds the pipeline. Sampled per loop iteration so a
+    // Settings change takes effect without a reboot; on a switch the whole
+    // chain resets (different sample rate ⇒ different bin/mel geometry, and
+    // BTrack state from one clock domain is meaningless in the other).
+    // Starts false to match the mic-rate melFb.setup() above — if the device
+    // boots with Line persisted, the first loop iteration takes the switch
+    // path and reconfigures everything for line-in.
+    bool srcLine = false;
+    // BTrack/tempo_estimator hard-code kFrameHz = 62.5 (32kHz/512 hop). The
+    // line-in hop rate is 31250/512 = 61.035Hz, so reported BPM must be
+    // scaled by 61.035/62.5 to be true BPM. Confidence is unitless — no scale.
+    float bpmScale = 1.0f;
+    uint32_t lastStall = 0;
+
     while (true) {
+        bool wantLine = (g_mode == MODE_LINE) && s_i2s_line;
+        if (wantLine != srcLine) {
+            srcLine  = wantLine;
+            bpmScale = srcLine ? (31250.0f / 512.0f) / 62.5f : 1.0f;
+            float rate = srcLine ? 31250.0f : 32000.0f;
+            // Mel top band must clear the source's Nyquist (15.625kHz on line-in)
+            melFb.setup(rate, 80.0f, srcLine ? 15000.0f : 16000.0f);
+            superflux.reset(); btrack.reset();
+            ring.advance(ring.available());  // drop other-rate samples
+            g_mic_armed = false; g_mic_locked = false; consec = 0;
+            btBeatSincePoll = false;
+            latestBTrackResult = audio_dsp::BTrack::Result{};
+            printf("Audio source: %s (fs=%.0f)\n", srcLine ? "line-in" : "mic", (double)rate);
+            ws_log("Audio source: %s", srcLine ? "line-in" : "mic");
+        }
+
         size_t br = 0;
-        if (i2s_channel_read(s_i2s_rx, samples, sizeof(samples), &br, pdMS_TO_TICKS(100)) != ESP_OK)
+        if (i2s_channel_read(srcLine ? s_i2s_line : s_i2s_rx,
+                             samples, sizeof(samples), &br, pdMS_TO_TICKS(100)) != ESP_OK) {
+            if (srcLine && (now_ms() - lastStall) >= 2000) {
+                lastStall = now_ms();
+                printf("line: no frames — check BCK/LRC wiring and SCKI\n");
+            }
             continue;
+        }
         int n = (int)(br / sizeof(int32_t));
         if (n <= 0) continue;
 
-        // Left-slot extraction/normalization — same stride-by-2 workaround as
-        // before (INMP441 L/R tied to GND; mono I2S mode returned all-zero
-        // samples in bring-up, see BEAT_DETECTION.md §3).
         int cnt = 0;
-        for (int i = 0; i < n; i += 2) {
-            norm[cnt++] = (float)((double)samples[i] / 2147483648.0);
+        if (srcLine) {
+            // PCM1808 is stereo — average L+R into the mono pipeline.
+            for (int i = 0; i + 1 < n; i += 2) {
+                norm[cnt++] = (float)(((double)samples[i] + (double)samples[i + 1]) / 2.0
+                                      / 2147483648.0);
+            }
+        } else {
+            // Left-slot extraction/normalization — same stride-by-2 workaround as
+            // before (INMP441 L/R tied to GND; mono I2S mode returned all-zero
+            // samples in bring-up, see BEAT_DETECTION.md §3).
+            for (int i = 0; i < n; i += 2) {
+                norm[cnt++] = (float)((double)samples[i] / 2147483648.0);
+            }
         }
         ring.write(norm, cnt);
 
@@ -2169,7 +2317,7 @@ static void mic_task(void *) {
         }
 
         uint32_t now = now_ms();
-        bool isAudio = (g_mode == MODE_AUDIO);
+        bool isAudio = mode_is_audio(g_mode);
         if (!isAudio) {
             g_mic_armed = false; g_mic_locked = false; consec = 0; btBeatSincePoll = false;
             if (wasAudio) { superflux.reset(); btrack.reset(); }
@@ -2183,6 +2331,7 @@ static void mic_task(void *) {
         // BTrack (fast path above) is the actual tempo source — read its
         // latest per-hop result, gated on the tunable lock-tier confidence.
         audio_dsp::BTrack::Result btResult = latestBTrackResult;
+        btResult.bpm *= bpmScale;  // frame-rate correction for line-in (see above)
         g_tele_conf  = btResult.confidence;
         g_tele_level = levelEmaDb;  // smoothed (~800ms) — see levelEmaDb declaration
         bool btConfident = btResult.confidence > g_micConfSil * 0.01f;
@@ -2279,7 +2428,8 @@ static void mic_task(void *) {
         // Tuning telemetry while in Audio mode
         if (isAudio && (now - lastDbg) >= 500) {
             lastDbg = now;
-            printf("mic lvl=%.1fdB ema=%.1fdB floor=%ddB raw=%.1f trk=%.1f conf=%.2f armed=%d lock=%d\n",
+            printf("%s lvl=%.1fdB ema=%.1fdB floor=%ddB raw=%.1f trk=%.1f conf=%.2f armed=%d lock=%d\n",
+                   srcLine ? "line" : "mic",
                    (double)frameLevelDb, (double)levelEmaDb, g_micFloor,
                    (double)g_mic_bpm, (double)g_mic_tracked, (double)btResult.confidence,
                    g_mic_armed ? 1 : 0, g_mic_locked ? 1 : 0);
@@ -2304,6 +2454,8 @@ extern "C" void app_main(void) {
 
     init_gpio();
     init_i2s_mic();
+    line_clock_start();  // PCM1808 SCKI — Phase 1, see PCM1808_PLAN.md
+    init_i2s_line();     // PCM1808 slave RX — Phase 3
     display.init();
 
     // Earliest possible "alive" indicator: light every segment the moment the
