@@ -2559,6 +2559,7 @@ extern "C" void app_main(void) {
             wifi_stop();
             wifi_start_ap();
         }
+        eth_check_autoip_grace();
         if (g_eth_lost) {
             g_eth_lost = false;
             printf("Ethernet lost — starting WiFi\n");

@@ -93,6 +93,18 @@ Plug a standard network cable into the Ethernet port before powering on. tapbox 
 
 Ethernet is always preferred over WiFi. If both are available, tapbox uses Ethernet.
 
+#### DHCP, AutoIP fallback, and traps
+
+With <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> left at the default <img src="docs/menu_value_auto.png" alt="Auto" height="26" valign="middle"> setting, Ethernet on tapbox is meant to work like a USB cable — plug it in and it just works. Most networks have a router that hands out an address automatically, and that's all tapbox needs.
+
+Occasionally there's no router in the picture at all — for example, a cable run straight from tapbox to a CDJ player or a laptop's Ethernet port, with nothing else in between. There's nobody there to hand out an address, so tapbox assigns itself a temporary one starting with `169.254.` so it's still reachable. You don't need to do anything for this to happen.
+
+> **Trap:** a `169.254.` address isn't guaranteed to be the final one. For about 2 minutes after it appears, tapbox keeps listening in case a proper router shows up late — if one does, tapbox switches to the address it offers and scrolls the new IP across the display, the same way it does at boot. If you jot down a `169.254.` address the moment it appears and hard-code it somewhere (an OSC destination, a saved shortcut) without noticing the display update a minute or two later, it may stop working.
+>
+> **Rule of thumb:** if the display shows a `169.254.` address, give it a couple of minutes to settle before writing it down. If you need an address that's guaranteed to never move, set <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> to <img src="docs/menu_value_stat.png" alt="Stat" height="26" valign="middle"> instead (see below).
+
+The DHCP/AutoIP race only restarts if the Ethernet cable is unplugged and re-seated (or tapbox reboots) — so re-seating the cable is also a reasonable first step if tapbox ever seems stuck on a stale address.
+
 ### WiFi
 
 tapbox can connect to your WiFi network and run Ableton Link over it. This is useful when your performance space does not have an Ethernet switch nearby, or when you need to sync with a device that is on WiFi and your router bridges multicast between the two interfaces.
@@ -369,7 +381,10 @@ The simulator requires Python 3 and no external packages.
 ## Troubleshooting
 
 **No IP address scrolls across the display at boot.**  
-tapbox could not connect to Ethernet within the boot timeout (3 seconds for static IP, 5 seconds for DHCP). Check the cable. If no cable is connected, tapbox starts WiFi — the display will scroll the IP once a connection is established, or `AP 192.168.4.1` if it falls back to access point mode.
+tapbox could not connect to Ethernet within the boot timeout — 3 seconds if no cable is detected, or up to 15 seconds if a cable is present and using DHCP, to allow time for a lease or an AutoIP self-assigned address. Check the cable. If no cable is connected, tapbox starts WiFi — the display will scroll the IP once a connection is established, or `AP 192.168.4.1` if it falls back to access point mode.
+
+**tapbox's IP address changed on its own a minute or two after boot.**  
+This is the DHCP/AutoIP handoff, not a fault — see [DHCP, AutoIP fallback, and traps](#dhcp-autoip-fallback-and-traps). tapbox self-assigned a `169.254.x.x` address because no DHCP server answered right away, then a real lease arrived within the 2-minute grace window and took over — the display scrolled the new address when it happened. If you need the address to never move, set a static IP instead.
 
 **tapbox shows dashes on the display after boot.**  
 It is connected to the network but has not received any Link peers yet. This is normal — the display fills in once another Link device joins the session.

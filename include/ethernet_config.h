@@ -5,6 +5,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "driver/gpio.h"
 
 static const char *ETH_TAG = "eth";
@@ -16,6 +17,16 @@ static char ethIPStr[16]  = "0.0.0.0";
 static esp_netif_t *s_eth_netif  = nullptr;
 static bool         s_use_static = false;
 
+// Once AutoIP (169.254.x.x) claims an address because DHCP hasn't answered
+// yet, DHCP keeps quietly retrying in the background and can override the
+// address later — fine during setup, dangerous mid-show if a tech has
+// already configured against the AutoIP address. Give DHCP a grace window
+// to still win the race, then stop it so the address can't change again
+// until the cable is re-seated.
+static bool          s_eth_autoip_pending  = false;
+static int64_t       s_eth_autoip_since_us = 0;
+static const int64_t ETH_AUTOIP_GRACE_US   = 120LL * 1000000LL;  // 2 minutes
+
 static void on_eth_event(void *, esp_event_base_t, int32_t id, void *) {
     switch (id) {
         case ETHERNET_EVENT_START:
@@ -23,6 +34,7 @@ static void on_eth_event(void *, esp_event_base_t, int32_t id, void *) {
             break;
         case ETHERNET_EVENT_CONNECTED:
             ethLinkUp = true;
+            s_eth_autoip_pending = false;
             if (s_use_static) {
                 // With static IP there is no GOT_IP event; mark connected here
                 // and populate ethIPStr from the netif's configured address.
@@ -30,12 +42,17 @@ static void on_eth_event(void *, esp_event_base_t, int32_t id, void *) {
                 if (esp_netif_get_ip_info(s_eth_netif, &info) == ESP_OK)
                     esp_ip4addr_ntoa(&info.ip, ethIPStr, sizeof(ethIPStr));
                 ethConnected = true;
+            } else {
+                // Re-seating the cable should restart the DHCP/AutoIP race
+                // fresh, even if a previous grace-window timeout stopped DHCP.
+                esp_netif_dhcpc_start(s_eth_netif);
             }
             break;
         case ETHERNET_EVENT_DISCONNECTED:
         case ETHERNET_EVENT_STOP:
             ethLinkUp    = false;
             ethConnected = false;
+            s_eth_autoip_pending = false;
             break;
         default:
             break;
@@ -49,6 +66,27 @@ static void on_got_ip(void *, esp_event_base_t, int32_t, void *data) {
     ethConnected = true;
     esp_ip4addr_ntoa(&event->ip_info.ip, ethIPStr, sizeof(ethIPStr));
     ESP_LOGI(ETH_TAG, "IP: %s", ethIPStr);
+
+    if (strncmp(ethIPStr, "169.254.", 8) == 0) {
+        if (!s_eth_autoip_pending) {
+            s_eth_autoip_pending  = true;
+            s_eth_autoip_since_us = esp_timer_get_time();
+        }
+    } else {
+        s_eth_autoip_pending = false;  // a real DHCP lease won the race
+    }
+}
+
+// Call periodically from the main loop. Once an AutoIP address has held for
+// ETH_AUTOIP_GRACE_US with no DHCP lease arriving, stop the DHCP client so
+// the address is stable for the rest of the show — only a cable re-seat
+// (ETHERNET_EVENT_CONNECTED) restarts the race.
+static void eth_check_autoip_grace() {
+    if (!s_eth_autoip_pending) return;
+    if (esp_timer_get_time() - s_eth_autoip_since_us < ETH_AUTOIP_GRACE_US) return;
+    s_eth_autoip_pending = false;
+    esp_netif_dhcpc_stop(s_eth_netif);
+    ESP_LOGI(ETH_TAG, "AutoIP address held with no DHCP reply — stopped retrying");
 }
 
 // Call after esp_event_loop_create_default() and esp_netif_init().
