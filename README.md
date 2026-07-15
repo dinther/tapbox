@@ -127,10 +127,12 @@ tapbox prefers Ethernet. WiFi is used automatically when no Ethernet cable is pr
 **First-time setup:**
 
 1. Boot tapbox without an Ethernet cable.
-2. Connect your phone or laptop to the **tapbox** open WiFi network.
-3. Open **http://192.168.4.1** in a browser.
-4. Enter your WiFi SSID and password and tap **Save Network — tapbox will reboot**.
-5. tapbox reboots and connects to your network as a client.
+2. Connect your phone or laptop to the **tapbox** WiFi network.
+3. Use the 8 digit password shown on the device on bootup. (It is the number shown after the IP address)
+4. Open **http://192.168.4.1** in a browser.
+5. Enter your regular WiFi SSID and password and tap **Save Network — tapbox will reboot**.
+6. tapbox reboots and connects to your network as a client.
+7. You know it worked when you see "sta" followed by an IP address on bootup.
 
 The ESP32 radio supports **2.4 GHz only**. If your router broadcasts separate 2.4 GHz and 5 GHz SSIDs, use the 2.4 GHz one.
 
@@ -138,31 +140,31 @@ If WiFi credentials are stored but the connection fails, tapbox falls back to AP
 
 ## Direct Connection — No Network Required
 
-tapbox can sync with a laptop running Ableton Live (or any Link-enabled app) — or directly with a Link-enabled standalone player — without a router or existing network. Three approaches work: tapbox's own WiFi access point, a direct Ethernet cable with automatic addressing (zero configuration, v1.14+), or a direct cable with static IPs.
+tapbox can sync with a PC running Ableton Live (or any Link-enabled app) — or directly with a Link-enabled standalone player — without a router or existing network. Three approaches work: tapbox's own WiFi access point, a direct Ethernet cable with automatic addressing, or a direct cable with static IPs on both devices.
 
 ### WiFi AP mode
 
-The simplest option — tapbox creates its own open WiFi network and everything runs on it.
+The simplest option — tapbox creates its own WiFi network and everything runs on it.
 
 1. In the menu, navigate to <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> and set it to <img src="docs/menu_value_ap.png" alt="  AP" height="26" valign="middle">. Confirm with select — tapbox reboots.
-2. On your laptop, connect to the **tapbox** WiFi network (open, no password).
-3. Ableton Link is active immediately. Tap to set tempo and phase as usual.
-4. The web config page is at **http://192.168.4.1** for display and network settings.
+2. On your laptop, connect to the **tapbox** WiFi network and enter the 8 digit password shown on the device at bootup.
+3. Ableton Link is active immediately. Tap to set tempo and phase.
+4. In AP mode, the web config page is at **http://192.168.4.1** for display and network settings.
 5. OSC commands reach tapbox at **192.168.4.1 port 8000**.
 
-> OTA firmware updates are not available in AP mode (no internet path). CDJ sync is also unavailable — Pioneer players use a wired network and do not join a WiFi access point.
+> OTA firmware updates are not available in AP mode as there is no internet path. CDJ sync is also unavailable — Pioneer players use a wired network and do not join a WiFi access point.
 
-### Direct Ethernet — automatic (v1.14+)
+### Direct Ethernet — automatic
 
-Since firmware **v1.14** a single patch cable between tapbox and a computer (or a Link-enabled player such as a Denon SC6000) needs **no configuration at all**. Leave tapbox on its default <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> = `DHCP` setting and connect the cable:
+A single patch cable between tapbox and a computer (or a Link-enabled player such as a Denon SC6000) needs **no configuration at all**. Leave tapbox on its default <img src="docs/menu_glyph_lan.png" alt="Lan." height="26" valign="middle"> = `Auto` setting and connect the cable:
 
-1. tapbox looks for a DHCP server; with none on the wire it self-assigns a **link-local address** (`169.254.x.x`) after a few seconds and scrolls it on the display. The address looks random but is derived from the device's MAC, so it stays the same every time.
+1. tapbox looks for a DHCP server for a few seconds; with none on the wire it self-assigns a **link-local address** (`169.254.x.x`) and scrolls it on the display. The address looks random but is derived from the device's MAC, so it stays the same every time.
 2. The other end does the same — Windows ("APIPA"), macOS, Linux, and Engine OS players all self-assign in the same `169.254.0.0/16` range when DHCP is absent. On Windows the adapter shows **"Unidentified network — No internet"**; that's normal for a bare cable.
 3. Both ends now share a subnet: Ableton Link discovers the peer, the web config page answers at the address on the display, and OSC works on port 8000.
 
 Give the computer up to a minute to give up on DHCP and self-assign — `ipconfig` showing an *Autoconfiguration IPv4 Address* means it's ready.
 
-> **One self-assigned adapter at a time.** Link-local addresses don't identify *which* cable they live on, so if a computer has **several** network adapters in the self-assigned state at once (e.g. two direct cables to different devices), the OS can route the range out of only one of them and the others become unreachable. One direct cable per machine works flawlessly; for anything more elaborate — or any show rig where addresses must never change — use the static plan below.
+> **One self-assigned adapter at a time.** Link-local addresses don't identify *which* cable they live on, so if a computer has **several** network adapters in the self-assigned state at once (e.g. two direct cables to different devices), the OS can route the range out of only one of them and the others become unreachable. One direct cable per machine works flawlessly; for anything more elaborate — or any show rig where addresses must never change — use the static IP plan below.
 
 > OTA firmware updates are not available on a direct cable (no internet path).
 
@@ -193,13 +195,13 @@ Modern hardware (including the WT32-ETH01 and USB-to-Ethernet adapters) supports
 | Subnet mask | `255.255.255.0` |
 | Default gateway | `192.168.10.1` *(or blank)* |
 
-The web config page is at **http://192.168.10.1**. Ableton Link and OSC work on the same address. The laptop's WiFi can remain connected to the internet independently.
+The web config page is at your chosen **http://192.168.10.1**. Ableton Link and OSC work on the same address. The laptop's WiFi can remain connected to the internet independently.
 
 > Do not set the laptop gateway to an address outside the tapbox subnet — it will cause routing errors on that interface. Leaving the gateway blank or pointing it at the tapbox IP is safe.
 
 ### Windows Firewall — letting Link through
 
-Ableton Link needs to *receive* UDP packets, and the Windows Firewall blocks unknown inbound traffic. The telltale symptom: you can ping tapbox and open its web page, but your Link app shows **0 peers** — or sees tapbox while tapbox's peers count stays at 0.
+Ableton Link needs to *receive* UDP packets, and the Windows Firewall blocks unknown inbound traffic. The telltale symptom: you can ping tapbox and open its web page, but your tapbox display shows **0 peers** — or sees tapbox while tapbox's peers count stays at 0.
 
 Two things make this common:
 
