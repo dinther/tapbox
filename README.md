@@ -23,7 +23,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 - **OTA updates** — open the menu, hold both buttons 3 s, release and confirm with select; device reboots and flashes latest firmware automatically on next network connection
 - **Factory reset** — open the menu, hold both buttons 8 s, confirm with select; returns device to store-bought state
 
-<p align="center"><a href="https://beatline.xyz/contact" ><img src="docs/make_me_one.png" alt="Button" /></a></p>
+<p align="center"><a href="https://beatline.xyz/projects/tapbox/" ><img src="docs/make_me_one.png" alt="Button" /></a></p>
 
 ## Hardware
 
