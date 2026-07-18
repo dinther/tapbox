@@ -130,7 +130,7 @@ module case_base(){
         translate([52.4,-12,thickness + 3.25]) cube([10, 24, 13.8]);
         
         //  Flat area for display board
-        translate([29.0,4.15,38.8]) cube([17.1, 83, 20], center=true);
+        translate([29.0,4.15,37.8]) cube([17.1, 83, 20], center=true);
         
         //  Flat area for menu button
         translate([29.0,-40,44.0-0.9]) cube([17, 14, 20], center=true);
@@ -219,7 +219,7 @@ module lid(){
         translate([w-bolt_offset, l-bolt_offset,2.61]) cylinder(d=9.0, h=3.4);
 
         //  display slot
-        translate([29, 2.15,-2]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module(cut=true);
+        translate([29, 2.15,-3]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module(cut=true);
         
         //  tap button slot
         //translate([-10,0,-27]) push_button(cut=true);
@@ -232,7 +232,7 @@ module lid(){
         translate([29,-38, 0]) menu_switch(cut=true); 
      
         //  Display cover cutout
-        translate([29,2.2,6-2]) rotate([0,0,90]) round_rounded_cube(width=67, length=21, height=5, corner_radius=2.5, bottom_edge_radius=0.1, top_edge_radius=0.1);  
+        translate([29,2.2,6-3]) rotate([0,0,90]) round_rounded_cube(width=67, length=21, height=5, corner_radius=2.5, bottom_edge_radius=0.1, top_edge_radius=0.1);  
     } 
 }
 
@@ -375,7 +375,7 @@ module 26650_battery_bulkhead(marker="", slot = true){
 //translate([0,-37,thickness + 4]) PCM1808();
 //translate([-7.2,14,thickness+2]) wt32_eth01();
 //translate([0,0,5.2]) wt32_bracket();
-//translate([29, 2.15,28.8]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module();
+//translate([29, 2.15,27.8]) rotate([0,0,-90]) 8_digit_7_segment_max9219_display_module();
 //translate([29,-38,height - lid_height]) menu_switch(cut=false);
 case_base();
 //translate([0,0,height-lid_height]) lid();
