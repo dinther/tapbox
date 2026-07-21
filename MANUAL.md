@@ -286,11 +286,17 @@ Both system functions are activated from **within the menu** by holding both but
 
 Open the menu, then hold both the **tap button** and the **select button** for **3 seconds**. The display shows <img src="docs/confirm_ota_hold.png" alt="UPd.----" height="26" valign="middle">. Release both buttons — the display changes to <img src="docs/confirm_ota_confirm.png" alt="UPd Yes" height="26" valign="middle">.
 
-Press **select** to confirm. tapbox saves a pending-update flag to memory, erases OTA data if necessary to return to the factory slot, and reboots. On the next boot, as soon as it obtains a network connection (Ethernet or WiFi), it downloads and installs the latest firmware automatically. The display shows `UPd.` followed by a progress percentage. When the percentage reaches 100, it shows <img src="docs/confirm_ota_done.png" alt="UPd. done" height="26" valign="middle"> and reboots into the new firmware.
+Press **select** to check for an update. tapbox contacts the server and compares the available version against what it's running. **Nothing reboots at this stage** — it just tells you what it found:
 
-If the download fails or the server is unreachable, the display shows <img src="docs/confirm_ota_err.png" alt="UPd.   Er" height="26" valign="middle"> and tapbox continues to boot normally. All settings are preserved across updates; only the firmware changes.
+- **You're already up to date** → the display shows `UPd no` and returns to the menu. Nothing else happens.
+- **The server can't be reached** (no internet route — e.g. a direct cable or AP-only connection) → the display shows `UPd Er` and returns to the menu.
+- **A newer version is available** → the display shows `UP` followed by that version number, for example <code>UP&nbsp;1.15.0</code>. Now you decide: press **select** to install it, or **tap** (or just wait 6 seconds) to cancel. Nothing is downloaded or changed unless you accept.
 
-To cancel: press **tap**, hold **select** for 1 second, or wait 6 seconds — tapbox returns to normal without scheduling an update.
+If you accept, tapbox saves a pending-update flag to memory, erases OTA data if necessary to return to the factory slot, and reboots. On the next boot, as soon as it obtains a network connection (Ethernet or WiFi), it downloads and installs that firmware. The display shows `UPd.` followed by a progress percentage; when it reaches 100 it shows <img src="docs/confirm_ota_done.png" alt="UPd. done" height="26" valign="middle"> and reboots into the new firmware. If the download itself fails partway, the display shows <img src="docs/confirm_ota_err.png" alt="UPd.   Er" height="26" valign="middle"> and tapbox continues to boot normally.
+
+All settings are preserved across updates; only the firmware changes.
+
+To cancel at any prompt: press **tap**, hold **select** for 1 second, or wait 6 seconds — tapbox returns to normal without scheduling anything.
 
 ---
 
@@ -355,7 +361,7 @@ More app guides will be added over time.
 
 **2.4 GHz only:** the ESP32 radio does not support 5 GHz WiFi. If your router broadcasts both bands under the same name, tapbox will find the 2.4 GHz one automatically. If it broadcasts them separately, enter the 2.4 GHz SSID.
 
-**Keeping firmware up to date:** open the menu, hold both buttons for 3 seconds and release, then confirm with select. The update runs automatically on the next boot as soon as tapbox gets a network connection — Ethernet or WiFi. Takes about 30 seconds. Settings are not affected.
+**Keeping firmware up to date:** open the menu, hold both buttons for 3 seconds and release, then press select to check. tapbox tells you right away whether you're already current (`UPd no`), can't reach the server (`UPd Er`), or there's a newer version — in which case it shows the version and waits for you to accept before doing anything. If you accept, it installs on the next boot as soon as it has a network connection. Takes about 30 seconds. Settings are not affected.
 
 ---
 

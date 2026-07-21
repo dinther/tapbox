@@ -19,6 +19,15 @@ CONFIG_LWIP_AUTOIP=y
 # C++ exceptions required by Ableton Link internals
 CONFIG_COMPILER_CXX_EXCEPTIONS=y
 CONFIG_COMPILER_CXX_RTTI=y
+# Emergency exception pool — default 0 means a throw whose exception object
+# can't be heap-allocated aborts the whole device (std::terminate). Link
+# throws UdpSendException on a transient UDP send failure and catches it to
+# repair the gateway; with a 0-size pool, if that throw lands while heap is
+# momentarily exhausted, __cxa_allocate_exception fails and it aborts instead.
+# A small reserved pool lets the exception throw and unwind normally even
+# under memory pressure. (Confirmed as a real abort() path via a decoded
+# crash backtrace through sendUdpMessage -> __cxa_allocate_exception.)
+CONFIG_COMPILER_CXX_EXCEPTIONS_EMG_POOL_SIZE=2048
 
 # 1 kHz tick so pdMS_TO_TICKS(1) == 1 tick (accurate button polling)
 CONFIG_FREERTOS_HZ=1000

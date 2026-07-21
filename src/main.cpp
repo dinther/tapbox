@@ -15,6 +15,7 @@
 #include "driver/ledc.h"
 #include "driver/i2s_std.h"
 #include "esp_https_ota.h"
+#include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -57,6 +58,7 @@
 #define SELECT_LONG_MS  1000
 #define OSC_PORT        8000
 #define OTA_URL         "https://dinther.github.io/tapbox/firmware.bin"
+#define MANIFEST_URL    "https://dinther.github.io/tapbox/manifest.json"
 
 // ── 7-segment characters (D6=A … D0=G) ────────────────────────────────────────
 static constexpr uint8_t CH_a = 0x7D;
@@ -212,10 +214,16 @@ static bool     s_scroll_holding    = false;  // paused with the PIN fully shown
 static uint32_t s_scroll_hold_start = 0;
 
 // ── Menu state ─────────────────────────────────────────────────────────────────
+// MODE_OTA_CONFIRM        — "check for an update?" (select runs the check)
+// MODE_OTA_INSTALL_CONFIRM — a newer version was found; its number is shown and
+//                            the user decides whether to install (select) or not
 enum AppMode { MODE_NORMAL, MODE_MENU_NAV, MODE_MENU_EDIT, MODE_MENU_CONFIRM,
-               MODE_OTA_CONFIRM };
+               MODE_OTA_CONFIRM, MODE_OTA_INSTALL_CONFIRM };
 static AppMode  appMode       = MODE_NORMAL;
 static uint32_t menuEnteredAt = 0;
+
+// Version found by the OTA check, shown on the MODE_OTA_INSTALL_CONFIRM screen.
+static int g_otaAvailMajor = 0, g_otaAvailMinor = 0, g_otaAvailPatch = 0;
 
 // Mic tuning (uind/SLEu/thr/gAte) and static-IP octets (IP/Sub./Hub.) are
 // configured on the web page only — see http_get_root(). The on-device menu
@@ -451,11 +459,26 @@ static void render_menu_value(uint8_t *segs, int item, int val) {
         case MENU_RESET:
             segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
             break;
-        case MENU_VER:
-            segs[5] = MAX7219Display::digit(FW_MAJOR) | MAX7219Display::SEG_DP;
-            segs[6] = MAX7219Display::digit(FW_MINOR) | MAX7219Display::SEG_DP;
-            segs[7] = MAX7219Display::digit(FW_PATCH);
+        case MENU_VER: {
+            // digit() wraps its argument mod 10, so a two-digit minor rendered
+            // in one slot shows wrong (14 -> "4", i.e. 1.14.2 read as 1.4.2).
+            // Single-digit minor keeps the original 3-slot maj.min.patch; a
+            // two-digit minor spreads into the 4-slot value area (segs 4-7),
+            // same as the Lan./Src menus. Assumes major and patch stay single
+            // digit, which holds for the foreseeable version range.
+            int minorTens = (FW_MINOR / 10) % 10;
+            if (minorTens) {
+                segs[4] = MAX7219Display::digit(FW_MAJOR)     | MAX7219Display::SEG_DP;
+                segs[5] = MAX7219Display::digit(minorTens);
+                segs[6] = MAX7219Display::digit(FW_MINOR % 10) | MAX7219Display::SEG_DP;
+                segs[7] = MAX7219Display::digit(FW_PATCH);
+            } else {
+                segs[5] = MAX7219Display::digit(FW_MAJOR) | MAX7219Display::SEG_DP;
+                segs[6] = MAX7219Display::digit(FW_MINOR) | MAX7219Display::SEG_DP;
+                segs[7] = MAX7219Display::digit(FW_PATCH);
+            }
             break;
+        }
         case MENU_DONE:
             break;
     }
@@ -550,6 +573,28 @@ static void update_display() {
         segs[0] = CH_u; segs[1] = CH_P; segs[2] = CH_d; segs[3] = MAX7219Display::SEG_BLANK;
         segs[4] = MAX7219Display::SEG_BLANK;
         segs[5] = CH_y; segs[6] = CH_e; segs[7] = CH_S;
+        display.setSegments(segs);
+        return;
+    }
+
+    if (appMode == MODE_OTA_INSTALL_CONFIRM) {
+        // "UP" + the available version — the user has seen what they'd get and
+        // decides here (select installs, tap/timeout cancels). Version rendered
+        // like vEr: two-digit minor spreads into segs 4-7, else the 3-slot form.
+        segs[0] = CH_u; segs[1] = CH_P;
+        segs[2] = segs[3] = MAX7219Display::SEG_BLANK;
+        int minorTens = (g_otaAvailMinor / 10) % 10;
+        if (minorTens) {
+            segs[4] = MAX7219Display::digit(g_otaAvailMajor)     | MAX7219Display::SEG_DP;
+            segs[5] = MAX7219Display::digit(minorTens);
+            segs[6] = MAX7219Display::digit(g_otaAvailMinor % 10) | MAX7219Display::SEG_DP;
+            segs[7] = MAX7219Display::digit(g_otaAvailPatch);
+        } else {
+            segs[4] = MAX7219Display::SEG_BLANK;
+            segs[5] = MAX7219Display::digit(g_otaAvailMajor) | MAX7219Display::SEG_DP;
+            segs[6] = MAX7219Display::digit(g_otaAvailMinor) | MAX7219Display::SEG_DP;
+            segs[7] = MAX7219Display::digit(g_otaAvailPatch);
+        }
         display.setSegments(segs);
         return;
     }
@@ -651,6 +696,91 @@ static void trigger_ota_pending() {
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
+}
+
+// ── OTA availability check ──────────────────────────────────────────────────────
+
+// Fetches manifest.json (small) and returns true only if it names a version
+// newer than the running firmware. *out_reachable reports whether the check
+// itself completed (fetched + parsed a version) — so the caller can tell
+// "already up to date" apart from "couldn't reach the server", and avoid
+// committing to a reboot for either. A GET of a few hundred bytes, unlike the
+// ~1.4 MB firmware download in perform_ota().
+static bool ota_update_available(bool *out_reachable) {
+    *out_reachable = false;
+    esp_http_client_config_t cfg = {};
+    cfg.url               = MANIFEST_URL;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.timeout_ms        = 10000;
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) return false;
+
+    bool newer = false;
+    if (esp_http_client_open(client, 0) == ESP_OK) {
+        esp_http_client_fetch_headers(client);
+        char buf[512] = {};
+        int total = 0, cap = (int)sizeof(buf) - 1;
+        while (total < cap) {
+            int n = esp_http_client_read(client, buf + total, cap - total);
+            if (n <= 0) break;
+            total += n;
+        }
+        buf[total] = '\0';
+        int rMaj = 0, rMin = 0, rPat = 0;
+        const char *p = strstr(buf, "\"version\"");
+        if (p) p = strchr(p, ':');
+        if (p) p = strchr(p, '"');
+        if (p && sscanf(p + 1, "%d.%d.%d", &rMaj, &rMin, &rPat) == 3) {
+            *out_reachable = true;
+            g_otaAvailMajor = rMaj; g_otaAvailMinor = rMin; g_otaAvailPatch = rPat;
+            newer = (rMaj > FW_MAJOR) ||
+                    (rMaj == FW_MAJOR && rMin > FW_MINOR) ||
+                    (rMaj == FW_MAJOR && rMin == FW_MINOR && rPat > FW_PATCH);
+            printf("OTA check: running v%d.%d.%d, manifest v%d.%d.%d -> %s\n",
+                   FW_MAJOR, FW_MINOR, FW_PATCH, rMaj, rMin, rPat,
+                   newer ? "update available" : "up to date");
+        } else {
+            printf("OTA check: reached server but couldn't parse manifest\n");
+        }
+    } else {
+        printf("OTA check: couldn't reach %s\n", MANIFEST_URL);
+    }
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return newer;
+}
+
+// OTA "check for update?" confirm: fetch the manifest and decide what to do,
+// WITHOUT rebooting yet. Shows UPd.---- while checking, then:
+//   newer + reachable -> show the version on MODE_OTA_INSTALL_CONFIRM and let
+//                        the user decide whether to install (see on_select_*)
+//   reachable, current -> UPd  no (up to date), back to menu
+//   unreachable        -> UPd  Er (couldn't reach server), back to menu
+// The reboot into the download only happens if the user then confirms the
+// install — so a check never burns a reboot on its own.
+static void on_ota_confirm() {
+    uint8_t segs[8] = {};
+    memcpy(segs, kOtaLabel, 4);
+    segs[4] = segs[5] = segs[6] = segs[7] = MAX7219Display::SEG_DASH;
+    display.setSegments(segs);
+
+    bool reachable = false;
+    if (ota_update_available(&reachable)) {
+        // g_otaAvail* now hold the newer version; show it and wait for the
+        // user's install decision rather than committing to the reboot here.
+        appMode       = MODE_OTA_INSTALL_CONFIRM;
+        menuEnteredAt = now_ms();
+        return;
+    }
+
+    memcpy(segs, kOtaLabel, 4);
+    segs[4] = segs[5] = MAX7219Display::SEG_BLANK;
+    if (reachable) { segs[6] = CH_n; segs[7] = CH_o; }  // "no" — already up to date
+    else           { segs[6] = CH_e; segs[7] = CH_r; }  // "Er" — couldn't reach server
+    display.setSegments(segs);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    appMode       = MODE_MENU_NAV;
+    menuEnteredAt = now_ms();
 }
 
 // ── Boot reboot display ────────────────────────────────────────────────────────
@@ -1304,8 +1434,15 @@ static void ws_send_async(void *arg) {
             frame.type    = HTTPD_WS_TYPE_TEXT;
             frame.payload = (uint8_t *)a->text;
             frame.len     = strlen(a->text);
-            if (httpd_ws_send_frame_async(s_httpd, fds[i], &frame) != ESP_OK)
-                printf("WS send failed (fd %d)\n", fds[i]);
+            if (httpd_ws_send_frame_async(s_httpd, fds[i], &frame) != ESP_OK) {
+                // A client that stops draining its socket (sleep, backgrounded
+                // tab, dropped link) never gets reclaimed on its own — httpd's
+                // default config leaves lru_purge off and only ~4 usable
+                // sockets, so a stale client squats a slot indefinitely.
+                // Close it; the page's JS reconnects on its own.
+                printf("WS send failed (fd %d) — closing it\n", fds[i]);
+                httpd_sess_trigger_close(s_httpd, fds[i]);
+            }
         }
     }
     free(a);
@@ -1648,6 +1785,7 @@ static void on_button_short_press() {
             break;
         }
         case MODE_OTA_CONFIRM:
+        case MODE_OTA_INSTALL_CONFIRM:  // tap declines the install
         case MODE_MENU_CONFIRM:
             appMode = MODE_NORMAL;
             break;
@@ -1757,7 +1895,10 @@ static void on_select_short_press() {
             break;
         }
         case MODE_OTA_CONFIRM:
-            trigger_ota_pending();  // does not return
+            on_ota_confirm();  // checks for an update; shows the version if one's found (no reboot yet)
+            break;
+        case MODE_OTA_INSTALL_CONFIRM:
+            trigger_ota_pending();  // user accepted the shown version — reboot + download; does not return
             break;
         case MODE_MENU_CONFIRM:
             factory_reset();  // does not return
@@ -1775,6 +1916,7 @@ static void on_select_long_press() {
         case MODE_MENU_NAV:
         case MODE_MENU_CONFIRM:
         case MODE_OTA_CONFIRM:
+        case MODE_OTA_INSTALL_CONFIRM:
             exit_menu();
             break;
         default: break;

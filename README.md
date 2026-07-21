@@ -20,7 +20,7 @@ The device is based on a ESP32 controller that joins an [Ableton Link](https://w
 - **IP ticker on boot** — non-blocking scroll of connection type, IP address, and security PIN at startup (<img src="docs/splash_eth.png" alt="Eth" height="22" valign="middle">, <img src="docs/splash_sta.png" alt="StA" height="22" valign="middle">, or <img src="docs/splash_ap.png" alt="AP" height="22" valign="middle">); the PIN doubles as the WiFi AP password and the web config page login; device is fully operational during the scroll
 - **OSC control** — UDP server on port 8000 for remote tap, BPM set, nudge, and downbeat reset
 - **Menu system** — on-device configuration with NVS persistence across power cycles
-- **OTA updates** — open the menu, hold both buttons 3 s, release and confirm with select; device reboots and flashes latest firmware automatically on next network connection
+- **OTA updates** — open the menu, hold both buttons 3 s, release and confirm; tapbox checks for a newer version first and shows it for you to accept before it reboots to install — so it never burns a reboot when you're already up to date or can't reach the server
 - **Factory reset** — open the menu, hold both buttons 8 s, confirm with select; returns device to store-bought state
 
 <p align="center"><a href="https://beatline.xyz/projects/tapbox/" ><img src="docs/make_me_one.png" alt="Button" /></a></p>
@@ -114,7 +114,13 @@ Both system functions are triggered from **within the menu** by holding both but
 
 ### OTA Firmware Update
 
-Open the menu, then hold both buttons for **3 seconds**. The display shows <img src="docs/confirm_ota_hold.png" alt="UPd.----" height="26" valign="middle">. Release — the display shows <img src="docs/confirm_ota_confirm.png" alt="UPd Yes" height="26" valign="middle">. Press **select** to confirm. tapbox saves an update flag, erases OTA data if needed, and reboots. On the next boot, as soon as it gets a network connection, it downloads and installs the latest firmware. The display shows `UPd.` with a progress percentage, then <img src="docs/menu_glyph_done.png" alt="done" height="26" valign="middle"> before rebooting into the new firmware.
+Open the menu, then hold both buttons for **3 seconds**. The display shows <img src="docs/confirm_ota_hold.png" alt="UPd.----" height="26" valign="middle">. Release — the display shows <img src="docs/confirm_ota_confirm.png" alt="UPd Yes" height="26" valign="middle">. Press **select** to check for an update. tapbox contacts the server and compares versions — **no reboot yet**:
+
+- **Already up to date** → shows `UPd no` and returns to the menu.
+- **Can't reach the server** (no internet route) → shows `UPd Er` and returns to the menu.
+- **A newer version is available** → shows `UP` followed by that version number (e.g. `UP 1.15.0`) and waits for your decision. Press **select** to install it, or **tap** (or wait) to cancel.
+
+Only when you accept the shown version does tapbox save the update flag, erase OTA data if needed, and reboot. On the next boot, as soon as it gets a network connection, it downloads and installs that firmware — the display shows `UPd.` with a progress percentage, then <img src="docs/menu_glyph_done.png" alt="done" height="26" valign="middle"> before rebooting into it.
 
 ### Factory Reset
 
