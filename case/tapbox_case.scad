@@ -374,6 +374,21 @@ module 26650_battery_bulkhead(marker="", slot = true){
     translate([2,-8,23]) rotate([42,0,0]) linear_extrude(2.8) text(marker, size=7, valign="center", halign="center");
 }
 
+module label(txt="tapbox"){
+    t = 0.8;
+    
+    union(){
+        difference(){
+            translate([-21.5,0, 0]) cube([43, 29.5, t]);
+            translate([0,15, -1]) linear_extrude(3) text(txt,size=9,halign="center", valign="center");
+        }
+        translate([-12,11.5,0]) cube([0.3, 5, t]);
+        translate([-4.6,11.5,0]) cube([0.3, 15, t]);
+        translate([2.1,11.5,0]) cube([0.3, 15, t]);
+        translate([8.7,11.5,0]) cube([0.3, 15, t]);
+    }
+}
+
 //translate([46.1,0,thickness + 8]) switch(cut=false);
 //translate([-10,0,thickness+ 4.5]) push_button(cut=false);
 //translate([-36,0,thickness]) battery();
@@ -384,6 +399,8 @@ module 26650_battery_bulkhead(marker="", slot = true){
 //translate([29,-38,height - lid_height]) menu_switch(cut=false);
 
 //translate([0,60,0]) translate([0,0,5.2]) wt32_bracket();
+
 case_base();
 //translate([0,0,height-lid_height]) lid();
+//translate([-49.6,0,thickness]) rotate([90,0,-90]) label(); //Print in different color
 
